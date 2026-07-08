@@ -2,7 +2,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+.venv_sim
+.venv
 # C extensions
 
 
