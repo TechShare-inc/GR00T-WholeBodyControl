@@ -339,6 +339,10 @@ class G1Deploy {
     // Output interfaces (supports multiple simultaneous outputs)
     std::vector<std::unique_ptr<OutputInterface>> output_interfaces_;
 
+    // Pipeline control-plane metadata
+    std::string deploy_instance_id_;       ///< UUID set at deploy startup for control_status
+    std::string input_type_;               ///< --input-type flag (zmq_manager, etc.) for control_status
+
     // =========================================================================
     // Core ML components (encoder + policy) and interfaces
     // =========================================================================
@@ -2179,7 +2183,10 @@ class G1Deploy {
         initial_max_close_ratio_(initial_max_close_ratio),
         //env(ORT_LOGGING_LEVEL_WARNING, "G1Deploy"),
         model_path(model_file_path),
-        planner_path(planner_file_path) {
+        planner_path(planner_file_path),
+        deploy_instance_id_(std::to_string(getpid()) + "-" +
+                            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())),
+        input_type_(input_type) {
       
       // Initialize ChannelFactory
       ChannelFactory::Instance()->Init(0, networkInterface);
@@ -2589,6 +2596,8 @@ class G1Deploy {
       }
           
       SetThreadPriority();
+
+      std::cout << "[INFO] Deploy instance ID: " << deploy_instance_id_ << std::endl;
     }
 
     ~G1Deploy()
@@ -3973,6 +3982,29 @@ class G1Deploy {
                 left_hand_joint_buffer_, right_hand_joint_buffer_, init_ref_data_root_rot_array_,
                 heading_state_buffer_, current_motion_copy, current_frame_copy
               );
+
+              // Control-status heartbeat: collect ZMQManager mode/stream state
+              // and publish at low rate so the pipeline control plane can
+              // confirm arming, stream mode, and data freshness.
+              OutputInterface::ControlStatus cs;
+              cs.instance_id = deploy_instance_id_;
+              cs.control_started = operator_state.start;
+              cs.control_stopped = operator_state.stop;
+              cs.input_type = input_type_;
+              if (auto* zm = dynamic_cast<ZMQManager*>(input_interface_.get())) {
+                cs.manager_mode = (zm->GetActiveMode() == ZMQManager::ManagedMode::STREAMED_MOTION)
+                                      ? "streamed_motion" : "planner";
+                cs.stream_enabled = zm->IsStreamEnabled();
+              } else {
+                cs.manager_mode = "unknown";
+                cs.stream_enabled = false;
+              }
+              auto last_pose = input_interface_->GetLastUpdateTime();
+              if (last_pose.has_value()) {
+                cs.last_pose_age_s = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - *last_pose).count();
+              }
+              output_interface->publish_control_status(cs);
             }
           }
 

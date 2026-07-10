@@ -107,6 +107,32 @@ public:
      */
     virtual void publish_config() {}
 
+    /**
+     * @brief Compact runtime status for external orchestration.
+     *
+     * Published at low rate (e.g. ~2 Hz) so the pipeline control plane can
+     * confirm arming, streamed-mode activation, and data freshness without
+     * polling the high-rate state frames.
+     */
+    struct ControlStatus {
+      std::string instance_id;           // UUID set at deploy start time
+      bool control_started = false;      // operator_state.start was acknowledged
+      bool control_stopped = false;      // operator_state.stop was acknowledged
+      std::string input_type;            // "zmq_manager", "manager", etc.
+      std::string manager_mode;          // "planner" or "streamed_motion"
+      bool stream_enabled = false;       // ZMQEndpointInterface::use_zmq_stream
+      double last_pose_age_s = -1.0;     // seconds since last ZMQ pose was received
+    };
+
+    /**
+     * @brief Publish a low-rate control_status heartbeat.
+     *
+     * The default implementation is a no-op.  ZMQOutputHandler overrides
+     * this to send a `control_status`-prefixed msgpack message on the
+     * existing PUB socket.
+     */
+    virtual void publish_control_status(const ControlStatus& /*status*/) {}
+
 protected:
 
     /**

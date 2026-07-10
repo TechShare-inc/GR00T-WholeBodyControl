@@ -131,7 +131,7 @@ public:
      */
     explicit ZMQOutputHandler(StateLogger& logger, int port, const std::string& topic) 
         : OutputInterface(logger), realtime_debug_context_(1), topic_(topic),
-          robot_config_topic_("robot_config") {
+          robot_config_topic_("robot_config"), control_status_topic_("control_status") {
 
         std::cout << "Initializing realtime debug socket" << std::endl;
         std::cout << "Binding to port: " << port << " and topic: " << topic_ << std::endl;
@@ -147,7 +147,8 @@ public:
         if constexpr (DEBUG_LOGGING) {
             std::cout << "[ZMQ Output DEBUG] ZMQOutputHandler initialized with topics: "
                       << "'" << topic_ << "' (combined state+viz), "
-                      << "'" << robot_config_topic_ << "' (config)" << std::endl;
+                      << "'" << robot_config_topic_ << "' (config), "
+                      << "'" << control_status_topic_ << "' (control status)" << std::endl;
         }
         
         type_ = OutputType::ZMQ;
@@ -198,6 +199,33 @@ public:
     }
 
     /**
+     * @brief Publish a low-rate control_status heartbeat (topic: "control_status").
+     *
+     * Throttled to CONTROL_STATUS_INTERVAL_SEC.  Serialises ControlStatus fields
+     * into a msgpack map and sends it as a non-blocking ZMQ message.
+     */
+    void publish_control_status(const OutputInterface::ControlStatus& status) override {
+        auto now = std::chrono::steady_clock::now();
+        double elapsed = std::chrono::duration<double>(now - control_status_last_publish_time_).count();
+        if (elapsed < CONTROL_STATUS_INTERVAL_SEC) {
+            return;
+        }
+        control_status_last_publish_time_ = now;
+
+        msgpack::sbuffer sbuf;
+        msgpack::packer<msgpack::sbuffer> pk(&sbuf);
+        pk.pack_map(7);
+        pk.pack("instance_id");     pk.pack(status.instance_id);
+        pk.pack("control_started"); pk.pack(status.control_started);
+        pk.pack("control_stopped"); pk.pack(status.control_stopped);
+        pk.pack("input_type");      pk.pack(status.input_type);
+        pk.pack("manager_mode");    pk.pack(status.manager_mode);
+        pk.pack("stream_enabled");  pk.pack(status.stream_enabled);
+        pk.pack("last_pose_age_s"); pk.pack(status.last_pose_age_s);
+        send_zmq_message(control_status_topic_, sbuf);
+    }
+
+    /**
      * @brief Publish robot_config if enough time has elapsed since the last send.
      *
      * On the first call the config is serialised from StateLogger and cached.
@@ -235,6 +263,7 @@ private:
 
     std::string topic_;              ///< User-provided topic name (e.g. "g1_debug") for combined state+viz.
     std::string robot_config_topic_; ///< Topic for robot config messages.
+    std::string control_status_topic_; ///< Topic for control status heartbeat.
 
     msgpack::sbuffer state_data_sbuf_;  ///< Reused each tick; cleared in pack_combined_state().
 
@@ -242,6 +271,10 @@ private:
     static constexpr double CONFIG_REPUBLISH_INTERVAL_SEC = 2.0;
     msgpack::sbuffer config_sbuf_cache_;  ///< Serialised config (populated on first publish_config()).
     std::chrono::steady_clock::time_point config_last_publish_time_;
+
+    // -- Control status heartbeat --
+    static constexpr double CONTROL_STATUS_INTERVAL_SEC = 0.5;  ///< ~2 Hz
+    std::chrono::steady_clock::time_point control_status_last_publish_time_;
 
     /// Non-blocking send of [topic][msgpack payload] over the PUB socket.
     void send_zmq_message(const std::string& topic, const msgpack::sbuffer& sbuf) {

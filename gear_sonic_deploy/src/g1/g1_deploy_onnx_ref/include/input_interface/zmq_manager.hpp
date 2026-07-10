@@ -444,6 +444,17 @@ class ZMQManager : public InputInterface {
       return InputInterface::GetLastUpdateTime();
     }
 
+    /// @return The current managed mode (PLANNER or STREAMED_MOTION).
+    ManagedMode GetActiveMode() const { return active_mode_; }
+
+    /// @return True when the pose interface has streamed motion enabled.
+    bool IsStreamEnabled() const {
+      if (pose_interface_) {
+        return pose_interface_->IsStreamEnabled();
+      }
+      return false;
+    }
+
   private:
     // Handle planner mode input (similar to GamepadManager::handleGamepadPlannerInput)
     void handlePlannerInput(MotionDataReader& motion_reader,

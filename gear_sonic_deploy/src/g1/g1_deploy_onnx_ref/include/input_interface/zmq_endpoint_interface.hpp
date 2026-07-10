@@ -575,6 +575,9 @@ public:
         toggle_zmq_mode = true;
     }
 
+    /// @return True when ZMQ streamed-motion mode is active.
+    bool IsStreamEnabled() const { return use_zmq_stream; }
+
     std::optional<std::chrono::steady_clock::time_point> GetLastUpdateTime() const override {
       if (is_localhost_) {
         return data_timestamp_;
