@@ -6,10 +6,11 @@
 # or ask for confirmation. Those steps belong in provisioning/bootstrap.
 #
 # Usage:
-#   scripts/run_noninteractive.sh <interface> [--checkpoint PATH] [--obs-config PATH]
-#                                   [--planner PATH] [--motion-data PATH]
-#                                   [--input-type TYPE] [--output-type TYPE]
-#                                   [--zmq-host HOST] [--zmq-port PORT] [...]
+#   scripts/run_noninteractive.sh <interface> <checkpoint> <motion-data>
+#                                   [--obs-config PATH] [--encoder-file PATH]
+#                                   [--planner-file PATH] [--input-type TYPE]
+#                                   [--output-type TYPE] [--zmq-host HOST]
+#                                   [--zmq-port PORT] [...]
 #
 # All options after <interface> are forwarded directly to g1_deploy_onnx_ref.
 set -euo pipefail
