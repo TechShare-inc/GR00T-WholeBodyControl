@@ -19,6 +19,7 @@ from unitree_sdk2py.idl.default import (
 )
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import WirelessController_
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, HandState_, OdoState_
+from unitree_sdk2py.utils.crc import CRC
 
 
 class UnitreeSdk2Bridge:
@@ -64,6 +65,7 @@ class UnitreeSdk2Bridge:
 
         # Unitree sdk2 message
         self.low_state = LowState_default()
+        self.crc = CRC()
         self.low_state_puber = ChannelPublisher("rt/lowstate", LowState_)
         self.low_state_puber.Init()
 
@@ -200,6 +202,7 @@ class UnitreeSdk2Bridge:
         if self.have_frame_sensor_:
             raise NotImplementedError("Frame sensor data is not implemented yet.")
         self.low_state.tick = int(obs["time"] * 1e3)
+        self.low_state.crc = self.crc.Crc(self.low_state)
         self.low_state_puber.Write(self.low_state)
 
         self.odo_state.tick = int(obs["time"] * 1e3)

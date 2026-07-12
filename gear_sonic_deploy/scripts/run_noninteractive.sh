@@ -70,6 +70,11 @@ if [[ ! -x "$BINARY" ]]; then
   exit 1
 fi
 
+TENSORRT_LIB_DIR="${TENSORRT_LIB_DIR:-$HOME/TensorRT-10.13.3.9/targets/aarch64-linux-gnu/lib}"
+if [[ -d "$TENSORRT_LIB_DIR" ]]; then
+  export LD_LIBRARY_PATH="$TENSORRT_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
 echo "[run_noninteractive] interface=$TARGET_IFACE (from '$INTERFACE_MODE')"
 echo "[run_noninteractive] binary=$BINARY"
 
