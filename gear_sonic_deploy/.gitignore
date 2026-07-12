@@ -5,3 +5,4 @@ build/
 target/
 logs/
 *.trt
+.sonic-deploy-engines.json
