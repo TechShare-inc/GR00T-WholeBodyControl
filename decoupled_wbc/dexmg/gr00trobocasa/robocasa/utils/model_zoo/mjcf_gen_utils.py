@@ -1,20 +1,20 @@
-import numpy as np
-import trimesh
-import os
-import robosuite
-import xml.etree.ElementTree as ET
-import shutil
-import json
-from termcolor import colored
 from copy import deepcopy
+import json
+import os
 from pathlib import Path
+import shutil
+import xml.etree.ElementTree as ET
+
+import numpy as np
+import robosuite
+from robosuite.utils.mjcf_utils import array_to_string
 
 # import robosuite_model_zoo
 from robosuite.utils.transform_utils import mat2quat
+import trimesh
+
 import robocasa.utils.model_zoo.log_utils as LogUtils
 import robocasa.utils.model_zoo.mtl_utils as MtlUtils
-
-from robosuite.utils.mjcf_utils import array_to_string, string_to_array
 
 
 def parse_model_info(
@@ -731,10 +731,9 @@ def decompose_convex(
 
     obj_file = filename.resolve()
 
-    import tempfile
-    import subprocess
     from pathlib import Path
-    import enum
+    import subprocess
+    import tempfile
 
     with tempfile.TemporaryDirectory() as tmpdirname:
         prev_dir = os.getcwd()

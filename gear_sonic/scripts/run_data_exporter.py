@@ -30,6 +30,7 @@ from scipy.spatial.transform import Rotation as R
 import tyro
 import zmq
 
+from gear_sonic.camera.composed_camera import ComposedCameraClientSensor
 from gear_sonic.data.exporter import Gr00tDataExporter
 from gear_sonic.data.features_sonic_vla import (
     get_features_sonic_vla,
@@ -38,7 +39,6 @@ from gear_sonic.data.features_sonic_vla import (
     get_wrist_camera_features,
     get_wrist_camera_modality_config,
 )
-from gear_sonic.camera.composed_camera import ComposedCameraClientSensor
 from gear_sonic.utils.data_collection.episode_state import EpisodeState
 from gear_sonic.utils.data_collection.keyboard_subscriber import ZMQKeyboardSubscriber
 from gear_sonic.utils.data_collection.telemetry import Telemetry

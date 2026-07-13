@@ -8,8 +8,8 @@ USE_JIT_TORCH_TRANSFORM env var) for performance.
 
 import enum
 import os
-import warnings
 from typing import Tuple
+import warnings
 
 import numpy as np
 import torch

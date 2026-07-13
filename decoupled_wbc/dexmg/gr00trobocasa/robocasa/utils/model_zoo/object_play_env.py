@@ -1,14 +1,12 @@
 import numpy as np
-
 from robosuite.environments.manipulation.single_arm_env import SingleArmEnv
 from robosuite.models.arenas import TableArena
+from robosuite.models.objects import BoxObject
 from robosuite.models.tasks import ManipulationTask
 from robosuite.utils.placement_samplers import UniformRandomSampler
+import robosuite.utils.transform_utils as T
 
 from robocasa.utils.model_zoo.mjcf_obj import MJCFObject
-from robosuite.models.objects import BoxObject
-
-import robosuite.utils.transform_utils as T
 
 
 class ObjectPlayEnv(SingleArmEnv):

@@ -6,7 +6,6 @@ import einops
 import torch
 
 from motionbricks.motionlib.core.skeletons import (
-    G1Skeleton,
     G1Skeleton32,
     G1Skeleton34,
     SkeletonBase,

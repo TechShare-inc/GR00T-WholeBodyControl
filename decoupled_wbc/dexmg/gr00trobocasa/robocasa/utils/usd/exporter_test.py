@@ -17,9 +17,9 @@
 import logging
 import os
 
-import mujoco
 from absl.testing import absltest
 from etils import epath
+import mujoco
 
 # Open3D and USD are not fully supported on all MuJoCo architectures.
 # pylint: disable=python.style(g-import-not-at-top)

@@ -1,10 +1,11 @@
 """Miscellaneous training utilities: W&B helpers, dynamic imports, OmegaConf tools, and timers."""
 
-import wandb
 import importlib
 import os
 import time
-from omegaconf import OmegaConf, DictConfig, ListConfig
+
+from omegaconf import DictConfig, ListConfig, OmegaConf
+import wandb
 
 
 def wandb_run_exists():
@@ -26,7 +27,7 @@ def recursive_set_struct(cfg, struct_value: bool):
                 value = cfg[key]
                 if isinstance(value, (DictConfig, ListConfig)):
                     recursive_set_struct(value, struct_value)
-            except Exception as e:
+            except Exception:
                 # print(e)
                 pass
     elif isinstance(cfg, ListConfig):

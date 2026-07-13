@@ -13,19 +13,18 @@
 # limitations under the License.
 # ==============================================================================
 import os
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional
 
 import mujoco
 import numpy as np
-import scipy
-import termcolor
-import tqdm
-from PIL import Image as im
-from PIL import ImageOps
+from PIL import Image as im, ImageOps
 
 # TODO: b/288149332 - Remove once USD Python Binding works well with pytype.
 # pytype: disable=module-attr
 from pxr import Sdf, Usd, UsdGeom
+import scipy
+import termcolor
+import tqdm
 
 import robocasa.utils.usd.component as component_module
 import robocasa.utils.usd.shapes as shapes_module

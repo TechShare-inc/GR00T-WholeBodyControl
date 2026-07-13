@@ -1,11 +1,14 @@
 import os
-import numpy as np
-import mujoco
 from types import SimpleNamespace
+
+import mujoco
+import numpy as np
 import torch as t
-from motionbricks.motion_backbone.inference.motion_inference import motion_inference
-from motionbricks.motion_backbone.demo.controllers import WASD_controller, random_controller
+
 from motionbricks.exp_setup.experiment import test
+from motionbricks.motion_backbone.demo.controllers import WASD_controller, random_controller
+from motionbricks.motion_backbone.inference.motion_inference import motion_inference
+
 
 class navigation_demo(object):
     def __init__(self, args):

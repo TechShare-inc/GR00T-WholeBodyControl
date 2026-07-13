@@ -16,8 +16,9 @@
 # Fix sys.path: when running as `python gear_sonic/train_agent_trl.py`, Python adds
 # gear_sonic/ to sys.path[0], causing `from trl import ...` to resolve to our local
 # gear_sonic/trl/ instead of the HuggingFace trl package. Replace with repo root.
-import sys
 import os
+import sys
+
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 _repo_root = os.path.dirname(_script_dir)
 if _script_dir in sys.path:

@@ -1,43 +1,4 @@
-from robocasa.environments.locomanipulation.base import (
-    PnPBottle,
-    PickBottleShelf,
-    PnPBottleHigh,
-    NavPickBottle,
-    PnPBottleRandRobotPose,
-    VisualReach,
-    PnPBottleFixtureToFixture,
-    PnPBottleFixtureToFixtureSourceDemo,
-    PnPBottleShelfToTable,
-    PnPBottleTableToTable,
-    PickBottleGround,
-    PickBottles,
-    NavPickBottles,
-    PnPBottlesTableToTable,
-)
-from robocasa.environments.locomanipulation.locomanip_basic import (
-    LMPickBottle,
-    LMPickBottleHigh,
-    LMNavPickBottle,
-    LMPickBottleGround,
-    LMPnPBottle,
-    LMPickMultipleBottles,
-    LMPnPMultipleBottles,
-    LMPickBottleShelf,
-    LMNavPickBottleShelf,
-    LMPickBottleShelfLow,
-    LMNavPickBottleShelfLow,
-    LMPnPBottleToPlate,
-    LMPnPAppleToPlate,
-)
-from robocasa.environments.locomanipulation.locomanip_pnp import (
-    LMBottlePnP,
-    LMBoxPnP,
-)
-
-from robocasa.environments.locomanipulation.locomanip_dc import (
-    LMNavPickBottleDC,
-    LMPnPAppleToPlateDC,
-)
+import mujoco
 
 # from robosuite.controllers import ALL_CONTROLLERS, load_controller_config
 from robosuite.controllers import ALL_PART_CONTROLLERS, load_composite_controller_config
@@ -45,8 +6,45 @@ from robosuite.environments import ALL_ENVIRONMENTS
 from robosuite.models.grippers import ALL_GRIPPERS
 from robosuite.robots import ALL_ROBOTS
 
-
-import mujoco
+from robocasa.environments.locomanipulation.base import (
+    NavPickBottle,
+    NavPickBottles,
+    PickBottleGround,
+    PickBottles,
+    PickBottleShelf,
+    PnPBottle,
+    PnPBottleFixtureToFixture,
+    PnPBottleFixtureToFixtureSourceDemo,
+    PnPBottleHigh,
+    PnPBottleRandRobotPose,
+    PnPBottleShelfToTable,
+    PnPBottlesTableToTable,
+    PnPBottleTableToTable,
+    VisualReach,
+)
+from robocasa.environments.locomanipulation.locomanip_basic import (
+    LMNavPickBottle,
+    LMNavPickBottleShelf,
+    LMNavPickBottleShelfLow,
+    LMPickBottle,
+    LMPickBottleGround,
+    LMPickBottleHigh,
+    LMPickBottleShelf,
+    LMPickBottleShelfLow,
+    LMPickMultipleBottles,
+    LMPnPAppleToPlate,
+    LMPnPBottle,
+    LMPnPBottleToPlate,
+    LMPnPMultipleBottles,
+)
+from robocasa.environments.locomanipulation.locomanip_dc import (
+    LMNavPickBottleDC,
+    LMPnPAppleToPlateDC,
+)
+from robocasa.environments.locomanipulation.locomanip_pnp import (
+    LMBottlePnP,
+    LMBoxPnP,
+)
 
 assert (
     mujoco.__version__ == "3.2.6" or mujoco.__version__ == "3.3.2"

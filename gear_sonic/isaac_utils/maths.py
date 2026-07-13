@@ -1,9 +1,10 @@
 """Basic math primitives for Isaac Lab: normalization, random floats, copysign, seeding."""
 
-import torch
-import numpy as np
-import random
 import os
+import random
+
+import numpy as np
+import torch
 
 
 @torch.jit.script

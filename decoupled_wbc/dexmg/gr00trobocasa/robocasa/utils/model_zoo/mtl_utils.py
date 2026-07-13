@@ -6,12 +6,12 @@ Credit: Kevin Zakka
 """
 
 from dataclasses import dataclass
-from typing import Optional, Sequence
-from PIL import Image
-from pathlib import Path
-
 import os
+from pathlib import Path
 import shutil
+from typing import Optional, Sequence
+
+from PIL import Image
 
 # MTL fields relevant to MuJoCo.
 _MTL_FIELDS = (

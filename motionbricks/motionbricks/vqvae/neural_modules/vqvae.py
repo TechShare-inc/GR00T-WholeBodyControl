@@ -1,14 +1,19 @@
+from types import SimpleNamespace
+from typing import List
+
+import numpy as np
 import torch as t
 from torch import nn
-import numpy as np
-from motionbricks.vqvae.neural_modules.quantize_cnn_multihead import QuantizeEMAResetMultiHead
-from motionbricks.vqvae.neural_modules.encdec_double_cond import DoubleCondDecoder
-from motionbricks.vqvae.neural_modules.encdec import Encoder
-from typing import Mapping, Tuple, List, Any
-from types import SimpleNamespace
+
+from motionbricks.helper.data_training_util import (
+    convert_sparse_cond_to_dense_cond_if_needed,
+    extract_feature_from_motion_rep,
+)
 from motionbricks.motionlib.core.motion_reps import MotionRepBase
-from motionbricks.helper.data_training_util import convert_sparse_cond_to_dense_cond_if_needed
-from motionbricks.helper.data_training_util import extract_feature_from_motion_rep
+from motionbricks.vqvae.neural_modules.encdec import Encoder
+from motionbricks.vqvae.neural_modules.encdec_double_cond import DoubleCondDecoder
+from motionbricks.vqvae.neural_modules.quantize_cnn_multihead import QuantizeEMAResetMultiHead
+
 
 class VQVAE(nn.Module):
     ALLOWED_FEATURE_MODE = [

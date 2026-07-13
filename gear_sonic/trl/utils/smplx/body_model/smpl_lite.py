@@ -1,18 +1,14 @@
 """Lightweight SMPL body models (SmplLite, SmplxLiteJ24) for efficient FK and skinning."""
 
-import pickle
 from pathlib import Path
-from time import time
+import pickle
 
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from einops import einsum, rearrange
 from smplx.utils import Struct, to_np, to_tensor
+import torch
+import torch.nn as nn
 
 from .rotation_conversions import axis_angle_to_matrix
-
 from .smplx_lite import batch_rigid_transform_v2
 
 

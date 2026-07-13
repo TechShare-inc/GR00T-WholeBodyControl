@@ -328,8 +328,8 @@ class UnitreeSdk2Bridge:
             print("Unsupported gamepad. ")
 
     def PrintSceneInformation(self):
-        import mujoco
         from loguru import logger
+        import mujoco
         from termcolor import colored
 
         print(" ")

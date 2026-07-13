@@ -1,14 +1,14 @@
 from typing import Dict
-import torch as t
+
 import numpy as np
-from motionbricks.motion_backbone.models.sampling import gumbel_sample
-from motionbricks.motion_backbone.models.pose_model import MotionModel as pose_model_cls
-from motionbricks.motion_backbone.models.root_model import MotionModel as root_model_cls
-from motionbricks.vqvae.neural_modules.vqvae import VQVAE as vqvae
+import torch as t
 
 from motionbricks.helper.data_training_util import extract_feature_from_motion_rep
+from motionbricks.motion_backbone.models.pose_model import MotionModel as pose_model_cls
+from motionbricks.motion_backbone.models.root_model import MotionModel as root_model_cls
+from motionbricks.motion_backbone.models.sampling import gumbel_sample
+from motionbricks.vqvae.neural_modules.vqvae import VQVAE as vqvae
 
-import copy
 
 class motion_inference(t.nn.Module):
     """ @brief: For simplicity, we are mostly likely ONLY CONSIDER batch_size=1 cases

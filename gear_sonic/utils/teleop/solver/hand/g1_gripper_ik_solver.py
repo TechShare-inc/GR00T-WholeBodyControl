@@ -9,6 +9,8 @@ closed pose.
 import numpy as np
 
 from gear_sonic.utils.teleop.solver.solver import Solver
+
+
 class G1GripperInverseKinematicsSolver(Solver):
     def __init__(self, side) -> None:
         self.side = "L" if side.lower() == "left" else "R"

@@ -6,6 +6,7 @@ quaternion apply, inverse, slerp, and SMPL joint computation.
 
 # This file assumes w x y z quaternion format
 import os
+
 import numpy as np
 import torch
 
@@ -24,7 +25,6 @@ if __name__ != "__main__":
     from .kornia_transform import (
         angle_axis_to_quaternion,
         angle_axis_to_rotation_matrix,
-        quaternion_to_angle_axis,
         quaternion_to_rotation_matrix,
         rotation_matrix_to_angle_axis,
         rotation_matrix_to_quaternion,
@@ -33,7 +33,6 @@ else:
     from kornia_transform import (
         angle_axis_to_quaternion,
         angle_axis_to_rotation_matrix,
-        quaternion_to_angle_axis,
         quaternion_to_rotation_matrix,
         rotation_matrix_to_angle_axis,
         rotation_matrix_to_quaternion,
@@ -221,7 +220,6 @@ def get_yaw(q, eps: float = 1e-6):
     return yaw
 
 
-import torch
 
 
 def swing_twist_decomposition_around_z_torch(

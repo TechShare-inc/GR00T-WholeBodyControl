@@ -1,19 +1,21 @@
-import numpy as np
-import torch as t
-import torch
 import logging
-from typing import Callable, Optional, Union, Dict
+from typing import Callable, Dict, Optional, Union
+
+import numpy as np
 from pytorch_lightning import LightningModule
+import torch
+import torch as t
+
+from motionbricks.helper.data_training_util import (
+    extract_feature_from_motion_rep,
+    sample_keyframes,
+    sample_motion_segments_from_motion_clips,
+)
 from motionbricks.motionlib.core.motion_reps import MotionRepBase
 from motionbricks.motionlib.core.motion_reps.dual_root_global_joints import (
     GlobalRootGlobalJoints,
     LocalRootGlobalJoints,
 )
-from motionbricks.helper.data_training_util import extract_feature_from_motion_rep
-from motionbricks.helper.data_training_util import (
-    sample_motion_segments_from_motion_clips,
-)
-from motionbricks.helper.data_training_util import sample_keyframes
 from motionbricks.vqvae.neural_modules import vqvae as vqvae_module
 
 log = logging.getLogger(__name__)

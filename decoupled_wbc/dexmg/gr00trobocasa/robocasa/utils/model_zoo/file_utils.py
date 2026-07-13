@@ -1,7 +1,6 @@
-from pathlib import Path
-
 # import robosuite_model_zoo
 import os
+from pathlib import Path
 import shutil
 
 

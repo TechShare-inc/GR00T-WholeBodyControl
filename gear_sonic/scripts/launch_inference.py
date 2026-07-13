@@ -32,13 +32,13 @@ Usage (from repo root — no venv activation needed):
     python gear_sonic/scripts/launch_inference.py --no-data-exporter     # no recording pane
 """
 
+import base64
 from dataclasses import dataclass
-from pathlib import Path
 import os
+from pathlib import Path
 import shutil
 import signal
 import socket
-import base64
 import subprocess
 import sys
 import textwrap

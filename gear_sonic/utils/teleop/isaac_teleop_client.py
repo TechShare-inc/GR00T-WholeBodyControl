@@ -14,16 +14,15 @@ by ``install_scripts/install_pico.sh``).
 
 from __future__ import annotations
 
-import time
 from contextlib import ExitStack
 from pathlib import Path
+import time
 from typing import Any
 
-import numpy as np
-
+from isaacteleop.cloudxr import CloudXRLauncher
 import isaacteleop.deviceio as deviceio
 import isaacteleop.oxr as oxr
-from isaacteleop.cloudxr import CloudXRLauncher
+import numpy as np
 
 
 def _default_pose_vec() -> np.ndarray:
@@ -325,8 +324,8 @@ def main() -> None:
         python -m gear_sonic.utils.teleop.isaac_teleop_client --hz 5
     """
     import argparse
-    import sys
     from pathlib import Path
+    import sys
 
     parser = argparse.ArgumentParser(
         description="Print IsaacTeleopClient getter outputs at a fixed rate."

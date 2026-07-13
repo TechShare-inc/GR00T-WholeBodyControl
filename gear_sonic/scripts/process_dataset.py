@@ -54,7 +54,6 @@ import numpy as np
 import pandas as pd
 import tyro
 
-
 SMPL_POSE_COLUMN = "teleop.smpl_pose"
 
 

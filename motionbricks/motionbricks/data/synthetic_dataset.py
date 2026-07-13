@@ -1,5 +1,5 @@
 import random
-from typing import List, Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 from torch import Tensor

@@ -1,5 +1,6 @@
-import torch.nn as nn
 import torch
+import torch.nn as nn
+
 
 class nonlinearity(nn.Module):
     def __init__(self):

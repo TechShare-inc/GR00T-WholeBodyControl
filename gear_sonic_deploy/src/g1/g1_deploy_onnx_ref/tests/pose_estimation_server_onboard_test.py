@@ -11,15 +11,13 @@ Usage:
 
 import argparse
 import json
-import os
-import struct
+import logging
+import sys
 import time
-import numpy as np
 from typing import Dict, Optional
 
-import sys
+import numpy as np
 
-import logging
 Log = logging.getLogger()
 import zmq
 

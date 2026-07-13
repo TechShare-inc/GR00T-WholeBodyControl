@@ -1,14 +1,17 @@
-import torch as t
-import torch
-from torch import nn
+from functools import cached_property
 from typing import Dict, Optional
+
 import numpy as np
+import torch
+import torch as t
+from torch import nn
+
+from motionbricks.helper.data_training_util import extract_feature_from_motion_rep
+from motionbricks.motion_backbone.neural_modules.mlp import FCBlock as mlp
 from motionbricks.motion_backbone.neural_modules.position_embedding import PositionEmbedding
 from motionbricks.motionlib.core.motion_reps import MotionRepBase
-from motionbricks.motion_backbone.neural_modules.mlp import FCBlock as mlp
-from functools import cached_property
 from motionbricks.vqvae.neural_modules.encdec_double_cond import DoubleCondDecoder
-from motionbricks.helper.data_training_util import extract_feature_from_motion_rep
+
 
 class root_backbone_network(nn.Module):
     def __init__(self, args: Dict, motion_rep: MotionRepBase):

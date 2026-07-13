@@ -3,8 +3,8 @@ Collection of constants for cameras / robots / etc
 in kitchen environments
 """
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 # https://github.com/yusukeurakami/mujoco_2d_projection

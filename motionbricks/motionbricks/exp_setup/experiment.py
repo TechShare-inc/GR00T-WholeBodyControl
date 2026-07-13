@@ -1,9 +1,11 @@
-import os
 import argparse
-from omegaconf import OmegaConf, open_dict
-from motionbricks.helper.pl_util import load_motion_rep
-from hydra.utils import instantiate
 import copy
+import os
+
+from hydra.utils import instantiate
+from omegaconf import OmegaConf, open_dict
+
+from motionbricks.helper.pl_util import load_motion_rep
 
 DEFAULT_RESULT_DIR = "./out"
 LOCAL_RESULT_DIR = ['./out', 'out/']

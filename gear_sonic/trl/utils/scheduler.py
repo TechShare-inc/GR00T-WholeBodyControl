@@ -5,13 +5,12 @@ config attributes, a WarmupCosineScheduler for LR with linear warm-up and
 cosine decay, and helpers for managing parameter change schedules.
 """
 
-import numpy
-import torch
 import math
-import re
+
+from omegaconf.dictconfig import DictConfig
+import torch
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
-from omegaconf.dictconfig import DictConfig
 
 
 def _navigate_object_path(obj, path, split_char="@"):

@@ -1,21 +1,20 @@
-import numpy as np
-import torch as t
-import torch
-import torch.nn as nn
-import xml.etree.ElementTree as ET
-import os
-import torch.nn.functional as F
 from typing import List
-from motionbricks.motionlib.core.motion_reps import MotionRepBase
-from motionbricks.motionlib.core.motion_reps.tools.changing_t_pose import get_global_offset
-from motionbricks.motionlib.core.utils.rotations import cont6d_to_matrix, quaternion_to_matrix
-from motionbricks.motionlib.core.utils.torch_utils import compute_idx_levels
-from motionbricks.motionlib.core.skeletons import SkeletonBase
+import xml.etree.ElementTree as ET
 
+import numpy as np
+import torch
+import torch as t
+import torch.nn as nn
+import torch.nn.functional as F
 
 # using this matrix_to_quaternion instead of the one in motionbricks.motionlib.core.utils.rotations
 # to avoid some tensorrt issues
 from motionbricks.geometry.quaternions import matrix_to_quaternion
+from motionbricks.motionlib.core.motion_reps import MotionRepBase
+from motionbricks.motionlib.core.skeletons import SkeletonBase
+from motionbricks.motionlib.core.utils.rotations import cont6d_to_matrix, quaternion_to_matrix
+from motionbricks.motionlib.core.utils.torch_utils import compute_idx_levels
+
 
 # redefining this function in motionbricks.motionlib.core.motion_rep.tools.changing_t_pose as
 # tensorrt complains about capital letters in t.einsum()

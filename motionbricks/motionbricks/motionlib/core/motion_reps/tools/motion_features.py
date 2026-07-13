@@ -1,10 +1,9 @@
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import einops
 import torch
 
 from motionbricks.motionlib.core.motion_reps.tools.changing_t_pose import (
-    change_t_pose_global_mats,
     change_t_pose_local_mats,
     global_mats_to_local_mats,
 )

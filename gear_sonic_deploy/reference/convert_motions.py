@@ -4,8 +4,9 @@ Convert G1 motion capture data from joblib pickle to C++ readable formats
 Converts motion sequences with joint positions, velocities, and full body kinematics
 """
 
-import sys
 import os
+import sys
+
 
 def convert_motion_data(pkl_file, base_output_dir=None):
     """Convert the motion pickle file to C++ readable formats"""
@@ -140,7 +141,6 @@ def convert_single_motion(motion_name, motion_data, output_dir):
 
 def save_array_as_csv(array, filename, headers=None):
     """Save numpy array as CSV file"""
-    import numpy as np
     
     with open(filename, 'w') as f:
         # Write header
@@ -250,7 +250,7 @@ def main():
         print("- Body linear & angular velocities")
         print("- Metadata and body part indices")
         print("\nNext steps:")
-        print(f"1. Build C++ reader: make motion_data_reader")
+        print("1. Build C++ reader: make motion_data_reader")
         print(f"2. Test reading: ./bin/motion_data_reader reference/{pkl_name}/")
         print("3. Use full kinematic data in your G1 control programs")
         print("\nFile structure created:")

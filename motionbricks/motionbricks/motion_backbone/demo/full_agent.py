@@ -1,19 +1,21 @@
-from motionbricks.motion_backbone.inference.motion_inference import motion_inference
 from copy import deepcopy
+import time
+
 import torch as t
 from torch.utils.data import DataLoader
-from motionbricks.motion_backbone.demo.clips import clip_holder_G1
-from motionbricks.helper.mujoco_helper import get_mujoco_converter
-import time
-from scipy.spatial.transform import Rotation as R
-from motionbricks.motionlib.core.utils.rotations import angle_to_Y_rotation_matrix, matrix_to_cont6d, quat_apply, quat_mul
-from motionbricks.motionlib.core.utils.rotations import quaternion_to_matrix
 
 # using this matrix_to_quaternion instead of the one in motionbricks.motionlib.core.utils.rotations
 # to avoid some tensorrt issues
 from motionbricks.geometry.quaternions import matrix_to_quaternion
+from motionbricks.helper.mujoco_helper import get_mujoco_converter
+from motionbricks.motion_backbone.demo.clips import clip_holder_G1
+from motionbricks.motion_backbone.inference.motion_inference import motion_inference
+from motionbricks.motionlib.core.utils.rotations import (
+    angle_to_Y_rotation_matrix,
+    matrix_to_cont6d,
+    quaternion_to_matrix,
+)
 
-import os
 
 def angle_to_Z_rotation_matrix(angle):
     """Create rotation matrix around Z-axis for Z-up coordinate system"""

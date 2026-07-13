@@ -3,12 +3,12 @@
 from pathlib import Path
 from time import time
 
+from einops import einsum, rearrange
 import numpy as np
+from smplx.utils import Struct, to_np, to_tensor
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import einsum, rearrange
-from smplx.utils import Struct, to_np, to_tensor
 
 from gear_sonic.trl.utils.rotation_conversion import (
     axis_angle_to_matrix,

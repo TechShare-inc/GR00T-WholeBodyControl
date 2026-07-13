@@ -31,10 +31,10 @@ Usage:
     visualizer.show_with_vr_pose(vr_3pt_pose)  # G1 robot will be shown at origin
 """
 
-import os
-import time
 from collections import deque
+import os
 from pathlib import Path
+import time
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np

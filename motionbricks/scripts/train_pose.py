@@ -16,14 +16,12 @@ import argparse
 import copy
 import os
 
-import pytorch_lightning as pl
-import torch
 from hydra.utils import instantiate
-from omegaconf import DictConfig, OmegaConf, open_dict
-from torch.utils.data import DataLoader
-
 from motionbricks.data.synthetic_dataset import SyntheticMotionDataset, collate_batch
 from motionbricks.helper.pl_util import load_motion_rep
+from omegaconf import OmegaConf, open_dict
+import pytorch_lightning as pl
+from torch.utils.data import DataLoader
 
 
 def load_config(result_dir: str, max_steps: int):

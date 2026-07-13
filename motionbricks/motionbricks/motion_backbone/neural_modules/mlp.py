@@ -1,5 +1,6 @@
 import torch as t
 
+
 class FCBlock(t.nn.Module):
     """Fully connected residual block"""
 

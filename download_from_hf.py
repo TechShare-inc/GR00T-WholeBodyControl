@@ -14,11 +14,10 @@ Usage:
 """
 
 import argparse
-import os
+from pathlib import Path
 import shutil
 import subprocess
 import sys
-from pathlib import Path
 
 REPO_ID = "nvidia/GEAR-SONIC"
 
@@ -211,15 +210,15 @@ def main():
     print(f"  Output dir : {output_dir}")
     if args.training:
         if args.low_latency:
-            print(f"  Mode       : low-latency training checkpoint")
+            print("  Mode       : low-latency training checkpoint")
         else:
-            print(f"  Mode       : training (checkpoint + SMPL data)")
+            print("  Mode       : training (checkpoint + SMPL data)")
     elif args.sample:
-        print(f"  Mode       : sample data (quick start)")
+        print("  Mode       : sample data (quick start)")
     elif args.low_latency:
-        print(f"  Mode       : low-latency deployment (ONNX models)")
+        print("  Mode       : low-latency deployment (ONNX models)")
     else:
-        print(f"  Mode       : deployment (ONNX models)")
+        print("  Mode       : deployment (ONNX models)")
     print("=" * 60)
 
     if args.sample:

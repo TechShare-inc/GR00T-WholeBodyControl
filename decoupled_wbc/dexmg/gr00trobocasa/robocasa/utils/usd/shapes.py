@@ -1,5 +1,3 @@
-import copy
-import pprint
 
 import mujoco
 import numpy as np
@@ -81,7 +79,7 @@ def mesh_config_generator(name: str, geom_type: mujoco.mjtGeom, size: np.ndarray
             },
         }
     else:
-        raise NotImplemented(
+        raise NotImplementedError(
             f"{geom_type} primitive geom type not implemented with USD integration"
         )
 

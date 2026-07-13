@@ -1,10 +1,10 @@
 import json
-import numpy as np
-from termcolor import colored
-from copy import deepcopy
 import os
 import sys
 import textwrap
+
+import numpy as np
+from termcolor import colored
 
 
 class NumpyEncoder(json.JSONEncoder):

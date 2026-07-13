@@ -1,10 +1,7 @@
 import inspect
 import os
-import random
-from copy import deepcopy
 from pathlib import Path
 
-import numpy as np
 from lxml import etree as ET
 from robosuite.utils.mjcf_utils import find_elements
 

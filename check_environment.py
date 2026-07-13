@@ -13,7 +13,6 @@ import importlib
 import os
 import platform
 import shutil
-import subprocess
 import sys
 
 
@@ -186,7 +185,7 @@ def main():
     elif "--deploy" in sys.argv:
         mode = "deploy"
 
-    print(f"GR00T-WholeBodyControl Environment Check")
+    print("GR00T-WholeBodyControl Environment Check")
     print(f"Platform: {platform.system()} {platform.machine()}")
     print(f"Python:   {sys.executable}")
     print()

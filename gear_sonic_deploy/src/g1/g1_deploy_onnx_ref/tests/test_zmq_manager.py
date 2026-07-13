@@ -9,12 +9,13 @@ Usage:
     python3 test_zmq_manager.py [--port PORT] [--host HOST]
 """
 
-import zmq
-import numpy as np
-import struct
-import json
-import time
 import argparse
+import json
+import struct
+import time
+
+import numpy as np
+import zmq
 
 HEADER_SIZE = 1280  # Must match ZMQPackedMessageSubscriber::HEADER_SIZE
 
@@ -33,7 +34,7 @@ class ZMQPublisher:
         
         if self.verbose:
             print(f"[Publisher] Bound to {self.endpoint}")
-            print(f"[Publisher] Publishing on topics: command, planner, pose")
+            print("[Publisher] Publishing on topics: command, planner, pose")
     
     def send_command(self, start, stop, planner, delta_heading=None):
         """
@@ -517,7 +518,7 @@ def _run_planner_and_streamed_steps(publisher):
     publisher.send_pose(joint_pos_1, joint_vel_1, body_quat_1, frame_indices_1, catch_up=False)
     frame_idx += frames_per_chunk
 
-    print(f"  Waiting 2s for robot to play chunk 1 (with rotation)...")
+    print("  Waiting 2s for robot to play chunk 1 (with rotation)...")
     for i in range(20):
         delta_heading = (np.pi / 2.0) * (i / 20.0)
         publisher.send_command(start=False, stop=False, planner=False, delta_heading=delta_heading)
@@ -531,7 +532,7 @@ def _run_planner_and_streamed_steps(publisher):
     publisher.send_pose(joint_pos_2, joint_vel_2, body_quat_2, frame_indices_2, catch_up=False)
     frame_idx += frames_per_chunk
 
-    print(f"  Waiting 2s for robot to play chunk 2 (continue rotation)...")
+    print("  Waiting 2s for robot to play chunk 2 (continue rotation)...")
     for i in range(20):
         delta_heading = (np.pi / 2.0) + (np.pi / 2.0) * (i / 20.0)
         publisher.send_command(start=False, stop=False, planner=False, delta_heading=delta_heading)

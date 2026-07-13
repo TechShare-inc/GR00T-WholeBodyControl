@@ -1,6 +1,8 @@
-import torch.nn as nn
 import torch
+import torch.nn as nn
+
 from motionbricks.vqvae.neural_modules.resnet import Resnet1D
+
 
 class DoubleCondDecoder(nn.Module):
     def __init__(self,

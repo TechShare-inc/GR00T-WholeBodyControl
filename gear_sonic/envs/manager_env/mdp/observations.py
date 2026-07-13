@@ -24,8 +24,7 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
 
 
-from isaaclab.managers import ObservationGroupCfg as ObsGroup
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import ObservationGroupCfg as ObsGroup, SceneEntityCfg
 from isaaclab.utils import configclass
 
 # Joint ordering constants (Mujoco order for compatibility)

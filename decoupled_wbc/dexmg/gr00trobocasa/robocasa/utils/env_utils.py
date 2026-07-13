@@ -1,16 +1,14 @@
-from robocasa.utils.dataset_registry import (
-    get_ds_path,
-    SINGLE_STAGE_TASK_DATASETS,
-    MULTI_STAGE_TASK_DATASETS,
-)
-from robocasa.scripts.playback_dataset import get_env_metadata_from_dataset
-from robosuite.controllers import load_composite_controller_config
-import os
-import robosuite
 import imageio
 import numpy as np
-from tqdm import tqdm
+import robosuite
+from robosuite.controllers import load_composite_controller_config
 from termcolor import colored
+from tqdm import tqdm
+
+from robocasa.utils.dataset_registry import (
+    MULTI_STAGE_TASK_DATASETS,
+    SINGLE_STAGE_TASK_DATASETS,
+)
 
 
 def create_env(

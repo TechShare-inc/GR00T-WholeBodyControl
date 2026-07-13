@@ -1,10 +1,13 @@
-import torch as t
-from motionbricks.motion_backbone.demo.clips import clip_holder_G1
+import copy
+import platform
+
 import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation as R
-import copy
-import platform
+import torch as t
+
+from motionbricks.motion_backbone.demo.clips import clip_holder_G1
+
 if platform.system() == 'Linux' or platform.system() == 'Darwin':
     from pynput import keyboard
 else:

@@ -1,15 +1,13 @@
-import xml.etree.ElementTree as ET
 from copy import deepcopy
+import xml.etree.ElementTree as ET
 
 import numpy as np
+from robosuite.models.grippers import FourierLeftHand, FourierRightHand, InspireLeftHand, InspireRightHand
+from robosuite.utils.mjcf_utils import new_body, new_site
+import robosuite.utils.transform_utils as T
+from robosuite.wrappers import VisualizationWrapper
 
 from robocasa.models.grippers import G1ThreeFingerLeftHand, G1ThreeFingerRightHand
-from robosuite.examples.third_party_controller.mink_controller import IKSolverMink
-from robosuite.models.grippers import InspireLeftHand, InspireRightHand
-from robosuite.models.grippers import FourierLeftHand, FourierRightHand
-from robosuite.utils.mjcf_utils import new_body, new_geom, new_site
-from robosuite.wrappers import VisualizationWrapper
-import robosuite.utils.transform_utils as T
 
 
 class IKWrapper(VisualizationWrapper):

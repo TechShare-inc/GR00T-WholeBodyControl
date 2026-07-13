@@ -8,12 +8,12 @@ from typing import Dict
 
 import tyro
 
-from gear_sonic.utils.mujoco_sim.simulator_factory import SimulatorFactory
-from gear_sonic.utils.mujoco_sim.configs import SimLoopConfig
 from gear_sonic.data.robot_model.instantiation.g1 import (
     instantiate_g1_robot_model,
 )
 from gear_sonic.data.robot_model.robot_model import RobotModel
+from gear_sonic.utils.mujoco_sim.configs import SimLoopConfig
+from gear_sonic.utils.mujoco_sim.simulator_factory import SimulatorFactory
 
 ArgsConfig = SimLoopConfig
 

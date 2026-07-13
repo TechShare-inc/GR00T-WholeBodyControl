@@ -1,12 +1,12 @@
 import argparse
-import torch as t
-import time
 import platform
+import time
 
+from motionbricks.motion_backbone.demo.utils import navigation_demo
 import mujoco
 import mujoco.viewer
 import numpy as np
-from motionbricks.motion_backbone.demo.utils import navigation_demo
+import torch as t
 
 
 def _disable_mujoco_keyboard_shortcuts(controller_keys='wasdrtfgeqzxcvb'):
@@ -21,7 +21,7 @@ def _disable_mujoco_keyboard_shortcuts(controller_keys='wasdrtfgeqzxcvb'):
     if platform.system() != 'Linux':
         return
     try:
-        from Xlib import display as xdisplay, X
+        from Xlib import X, display as xdisplay
         _xdpy = xdisplay.Display()
         _root = _xdpy.screen().root
 

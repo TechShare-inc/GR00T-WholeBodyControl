@@ -1,11 +1,11 @@
 """Generic BodyModel wrapper around SMPL/SMPLH/SMPLX with optional vertex selection."""
 
 import numpy as np
-import torch
-import torch.nn as nn
 from smplx import SMPL, SMPLH, SMPLX
 from smplx.utils import Struct
 from smplx.vertex_ids import vertex_ids
+import torch
+import torch.nn as nn
 
 
 class BodyModel(nn.Module):

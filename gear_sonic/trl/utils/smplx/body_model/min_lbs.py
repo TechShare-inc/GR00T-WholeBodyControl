@@ -1,13 +1,12 @@
 """Minimal Linear Blend Skinning (LBS) for sparse sensor-point vertices on SMPLH."""
 
+from hmr4d.utils.smplx_utils import forward_kinematics_motion
+from motiondiff.models.mdm.rotation_conversions import axis_angle_to_matrix
 import numpy as np
+from smplx.utils import Struct, to_np, to_tensor
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from smplx.utils import Struct, to_np, to_tensor
-
-from hmr4d.utils.smplx_utils import forward_kinematics_motion
-from motiondiff.models.mdm.rotation_conversions import axis_angle_to_matrix
 
 
 class MinimalLBS(nn.Module):

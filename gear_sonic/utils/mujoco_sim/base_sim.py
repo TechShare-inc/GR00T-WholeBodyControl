@@ -21,10 +21,10 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 
-from gear_sonic.utils.mujoco_sim.metric_utils import check_contact, check_height
+from gear_sonic.utils.mujoco_sim.metric_utils import check_contact
+from gear_sonic.utils.mujoco_sim.robot import Robot
 from gear_sonic.utils.mujoco_sim.sim_utils import get_subtree_body_names
 from gear_sonic.utils.mujoco_sim.unitree_sdk2py_bridge import ElasticBand, UnitreeSdk2Bridge
-from gear_sonic.utils.mujoco_sim.robot import Robot
 
 GEAR_SONIC_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 

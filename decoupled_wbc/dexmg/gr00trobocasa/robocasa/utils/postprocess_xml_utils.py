@@ -1,12 +1,4 @@
-import h5py
-import json
-import argparse
-import os
-from shutil import copyfile
-import robosuite
 import xml.etree.ElementTree as ET
-from tqdm import tqdm
-import numpy as np
 
 
 def get_eef_panda_site(prefix):
@@ -63,7 +55,7 @@ def convert_xml(xml_str):
         path = asset.get("file")
         assert "robosuite/models/assets" in path or "robocasa/models/assets" in path, print(path)
         if "mounts" in path:
-            assert not "robot" in path
+            assert "robot" not in path
             new_path = path.replace(
                 "robosuite/models/assets/mounts", "robosuite/models/assets/bases"
             )

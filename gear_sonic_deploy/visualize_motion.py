@@ -1,18 +1,17 @@
 import argparse
 import csv
 import os
+import threading
 import time
-from scipy.spatial.transform import Rotation as R
 
+from lxml import etree
+import msgpack
 import mujoco
 import mujoco.viewer
 import numpy as np
-
-from lxml import etree
-
+from scipy.spatial.transform import Rotation as R
 import zmq
-import threading
-import msgpack
+
 
 def key_call_back(keycode):
     global \

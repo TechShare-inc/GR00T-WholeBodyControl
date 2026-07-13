@@ -1,5 +1,5 @@
-from omegaconf import DictConfig
 from hydra.utils import instantiate
+from omegaconf import DictConfig
 
 
 def load_motion_rep(conf: DictConfig):

@@ -1,14 +1,13 @@
 """SMPL/SMPLX body model utilities: creation and pose decomposition."""
 
-import os
-import pickle
 from pathlib import Path
+import pickle
 
 import numpy as np
 import smplx
+from smplx import SMPLXLayer
 import torch
 import torch.nn.functional as F
-from smplx import SMPL, SMPLX, SMPLXLayer
 
 from gear_sonic.trl.utils.smplx.body_model import BodyModelSMPLH, BodyModelSMPLX
 from gear_sonic.trl.utils.smplx.body_model.smplx_lite import (

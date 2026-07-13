@@ -1,12 +1,11 @@
 """ZMQ PUB server for streaming JPEG-encoded camera images as msgpack payloads."""
 
 import base64
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict
 
 import cv2
 import msgpack
-import msgpack_numpy as m
 import numpy as np
 import zmq
 

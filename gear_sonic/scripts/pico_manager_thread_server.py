@@ -35,8 +35,6 @@ from scipy.spatial.transform import Rotation as R, Rotation as sRot
 import torch
 import zmq
 
-from gear_sonic.utils.teleop import input_readers
-from gear_sonic.utils.teleop.zmq.zmq_poller import ZMQPoller
 from gear_sonic.trl.utils.rotation_conversion import decompose_rotation_aa
 from gear_sonic.trl.utils.torch_transform import (
     angle_axis_to_quaternion,
@@ -46,6 +44,8 @@ from gear_sonic.trl.utils.torch_transform import (
     quaternion_to_angle_axis,
     quaternion_to_rotation_matrix,
 )
+from gear_sonic.utils.teleop import input_readers
+from gear_sonic.utils.teleop.zmq.zmq_poller import ZMQPoller
 
 try:
     from gear_sonic.utils.teleop.zmq.zmq_planner_sender import (

@@ -6,14 +6,6 @@ import xml.etree.ElementTree as ET
 
 import mujoco
 import numpy as np
-import robosuite
-from robosuite.environments.base import EnvMeta
-from robosuite.environments.manipulation.manipulation_env import ManipulationEnv
-from robosuite.models.arenas import Arena
-from robosuite.models.tasks import ManipulationTask
-from robosuite.utils.mjcf_utils import array_to_string, find_elements, xml_path_completion
-from robosuite.utils.observables import Observable, sensor
-
 import robocasa
 from robocasa.models.objects.objects import MJCFObject
 from robocasa.models.scenes import GroundArena
@@ -21,6 +13,13 @@ import robocasa.utils.camera_utils as CamUtils
 from robocasa.utils.dexmg_utils import DexMGConfigHelper
 from robocasa.utils.object_utils import check_obj_upright
 from robocasa.utils.visuals_utls import Gradient, randomize_materials_rgba
+import robosuite
+from robosuite.environments.base import EnvMeta
+from robosuite.environments.manipulation.manipulation_env import ManipulationEnv
+from robosuite.models.arenas import Arena
+from robosuite.models.tasks import ManipulationTask
+from robosuite.utils.mjcf_utils import array_to_string, find_elements, xml_path_completion
+from robosuite.utils.observables import Observable, sensor
 
 REGISTERED_LOCOMANIPULATION_ENVS = {}
 

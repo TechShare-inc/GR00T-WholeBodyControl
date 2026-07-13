@@ -1,17 +1,24 @@
-from motionbricks.vqvae.neural_modules import vqvae
-from motionbricks.motion_backbone.neural_modules.pose_backbone import pose_backbone_network
-import torch as t
-import os
 import logging
-from typing import Callable, Optional, Union, Dict
+import os
+from typing import Callable, Dict, Optional, Union
 
-import torch
-from pytorch_lightning import LightningModule
-from motionbricks.motionlib.core.motion_reps import MotionRepBase
 import numpy as np
-from motionbricks.motionlib.core.motion_reps.dual_root_global_joints import GlobalRootGlobalJoints, LocalRootGlobalJoints
-from motionbricks.helper.data_training_util import sample_motion_segments_from_motion_clips
-from motionbricks.helper.data_training_util import sample_keyframes, extract_feature_from_motion_rep
+from pytorch_lightning import LightningModule
+import torch
+import torch as t
+
+from motionbricks.helper.data_training_util import (
+    extract_feature_from_motion_rep,
+    sample_keyframes,
+    sample_motion_segments_from_motion_clips,
+)
+from motionbricks.motion_backbone.neural_modules.pose_backbone import pose_backbone_network
+from motionbricks.motionlib.core.motion_reps import MotionRepBase
+from motionbricks.motionlib.core.motion_reps.dual_root_global_joints import (
+    GlobalRootGlobalJoints,
+    LocalRootGlobalJoints,
+)
+from motionbricks.vqvae.neural_modules import vqvae
 
 log = logging.getLogger(__name__)
 
@@ -95,7 +102,7 @@ class MotionModel(LightningModule):
                     if self._supporting_networks['root_net'] is not None else None
                 self.backbone_net.init_embedding_from_codebooks(pose_codebook, root_codebook)
         else:
-            print(f"No VQVAE model checkpoint path available; Assuming the vqvae weights are intergrated in the model")
+            print("No VQVAE model checkpoint path available; Assuming the vqvae weights are intergrated in the model")
 
     def configure_optimizers(self):
         if self.one_logger_callback is not None:

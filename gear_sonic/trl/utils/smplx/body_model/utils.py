@@ -1,9 +1,7 @@
 """SMPLH/SMPLX joint name constants, body-part indices, and OpenPose mapping."""
 
-import os
 
 import numpy as np
-import torch
 
 SMPLH_JOINT_NAMES = [
     "pelvis",

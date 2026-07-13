@@ -4,9 +4,10 @@ Provides linear interpolation (via scipy), quaternion slerp, and
 functions to up/down-sample joint pose trajectories to a target frame rate.
 """
 
-import torch
 import numpy as np
 from scipy.interpolate import interp1d
+import torch
+
 from .kornia_transform import angle_axis_to_quaternion, quaternion_to_angle_axis
 
 

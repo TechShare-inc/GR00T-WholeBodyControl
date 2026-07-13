@@ -1,6 +1,7 @@
+import math
+
 import torch
 from torch import nn
-import math
 
 
 def PE1d_sincos(seq_length, dim):

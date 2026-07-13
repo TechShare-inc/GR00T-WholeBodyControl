@@ -1,6 +1,7 @@
+import numpy as np
 import torch
 import torch as t
-import numpy as np
+
 from motionbricks.motionlib.core.motion_reps import MotionRepBase
 
 

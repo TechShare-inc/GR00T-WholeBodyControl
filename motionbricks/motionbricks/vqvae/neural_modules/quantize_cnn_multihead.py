@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from vector_quantize_pytorch import VectorQuantize
 
+
 class QuantizeEMAResetMultiHead(nn.Module):
     def __init__(self, nb_code: int, code_dim: int, args):
         super().__init__()

@@ -2,8 +2,6 @@ import collections
 from copy import copy
 
 import numpy as np
-
-from robocasa.models.objects.objects import MJCFObject
 from robosuite.models.objects import MujocoObject
 from robosuite.utils import RandomizationError
 from robosuite.utils.transform_utils import (
@@ -14,10 +12,11 @@ from robosuite.utils.transform_utils import (
     rotate_2d_point,
 )
 
+from robocasa.models.objects.objects import MJCFObject
 from robocasa.utils.object_utils import (
     obj_in_region,
-    objs_intersect,
     obj_in_region_with_keypoints,
+    objs_intersect,
 )
 
 
