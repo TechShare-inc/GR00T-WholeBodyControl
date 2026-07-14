@@ -1,3 +1,4 @@
+#include <atomic>
 /**
  * @file robot_parameters.hpp
  * @brief Hardware-level constants, data structures, and joint indices for the
@@ -64,7 +65,7 @@ struct HeadingState {
  * @brief High-level operator signals (set by input interfaces, read by control loop).
  */
 struct OperatorState {
-  bool stop = false;   ///< Emergency stop requested.
+  std::atomic_bool stop = false;  ///< Emergency stop requested.
   bool start = false;  ///< Control-system start requested.
   bool play = false;   ///< Motion playback active.
 };
