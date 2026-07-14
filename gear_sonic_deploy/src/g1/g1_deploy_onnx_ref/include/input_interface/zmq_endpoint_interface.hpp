@@ -584,6 +584,11 @@ public:
       }
       return last_receive_time_;
     }
+
+        std::optional<int64_t> GetLastAcceptedFrameIndex() const override {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            return last_accepted_frame_index_;
+        }
     
 private:
     /// Reset the streamed motion buffer, merger state, and protocol version.
@@ -1718,6 +1723,9 @@ private:
         result.did_catchup_reset = merge_result.did_catchup_reset;
         result.frame_step = merge_result.frame_step;
         result.protocol_version = merge_result.protocol_version;
+        if (!incoming_data.frame_indices.empty()) {
+            last_accepted_frame_index_ = incoming_data.frame_indices.back();
+        }
         
         // Handle hand joints: set hand joint values directly from decoded data
         if (has_left_hand_joints || has_right_hand_joints) {
@@ -1862,6 +1870,7 @@ private:
     std::optional<std::chrono::steady_clock::time_point> last_receive_time_{}; ///< Timestamp of last OnPoseDataReceived (ms, monotonic).
     uint64_t receive_count_ = 0;       ///< Total number of messages received.
     uint64_t last_decode_time_ = 0;    ///< Timestamp of last DecodeIntoMotionSequence call (ms).
+    std::optional<int64_t> last_accepted_frame_index_{};
     
 };
 

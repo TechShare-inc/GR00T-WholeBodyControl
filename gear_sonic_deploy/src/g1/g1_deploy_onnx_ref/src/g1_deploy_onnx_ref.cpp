@@ -4004,6 +4004,10 @@ class G1Deploy {
                 cs.last_pose_age_s = std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - *last_pose).count();
               }
+              auto last_frame = input_interface_->GetLastAcceptedFrameIndex();
+              if (last_frame.has_value()) {
+                cs.last_accepted_frame_index = *last_frame;
+              }
               output_interface->publish_control_status(cs);
             }
           }

@@ -444,6 +444,13 @@ class ZMQManager : public InputInterface {
       return InputInterface::GetLastUpdateTime();
     }
 
+    std::optional<int64_t> GetLastAcceptedFrameIndex() const override {
+      if (active_mode_ == ManagedMode::STREAMED_MOTION && pose_interface_) {
+        return pose_interface_->GetLastAcceptedFrameIndex();
+      }
+      return {};
+    }
+
     /// @return The current managed mode (PLANNER or STREAMED_MOTION).
     ManagedMode GetActiveMode() const { return active_mode_; }
 

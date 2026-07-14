@@ -214,7 +214,7 @@ public:
 
         msgpack::sbuffer sbuf;
         msgpack::packer<msgpack::sbuffer> pk(&sbuf);
-        pk.pack_map(7);
+        pk.pack_map(8);
         pk.pack("instance_id");     pk.pack(status.instance_id);
         pk.pack("control_started"); pk.pack(status.control_started);
         pk.pack("control_stopped"); pk.pack(status.control_stopped);
@@ -222,6 +222,7 @@ public:
         pk.pack("manager_mode");    pk.pack(status.manager_mode);
         pk.pack("stream_enabled");  pk.pack(status.stream_enabled);
         pk.pack("last_pose_age_s"); pk.pack(status.last_pose_age_s);
+        pk.pack("last_accepted_frame_index"); pk.pack(status.last_accepted_frame_index);
         send_zmq_message(control_status_topic_, sbuf);
     }
 
