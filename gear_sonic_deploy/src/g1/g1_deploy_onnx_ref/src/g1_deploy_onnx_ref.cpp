@@ -3581,7 +3581,7 @@ class G1Deploy {
         (*record_input_file_) << current_frame_ << ",";
         (*record_input_file_) << operator_state.play << ",";
         (*record_input_file_) << operator_state.start << ",";
-        (*record_input_file_) << operator_state.stop << ",";
+        (*record_input_file_) << operator_state.stop.load() << ",";
 
         (*record_input_file_) << planner_state.enabled << ",";
         (*record_input_file_) << planner_state.initialized << ",";
