@@ -31,6 +31,7 @@
 
 #include <unistd.h>
 #include <atomic>
+#include <cstdint>
 #include <queue>
 #include <memory>
 #include <optional>
@@ -393,6 +394,11 @@ public:
     /// @brief Get the last update time of the input interface.
     virtual std::optional<std::chrono::steady_clock::time_point> GetLastUpdateTime() const {
         // Return empty optional as a default, implementers should override this if they have a timestamp
+        return {};
+    }
+
+    /// @return The highest accepted ZMQ pose frame index, when available.
+    virtual std::optional<int64_t> GetLastAcceptedFrameIndex() const {
         return {};
     }
 

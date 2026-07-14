@@ -122,6 +122,7 @@ public:
       std::string manager_mode;          // "planner" or "streamed_motion"
       bool stream_enabled = false;       // ZMQEndpointInterface::use_zmq_stream
       double last_pose_age_s = -1.0;     // seconds since last ZMQ pose was received
+      int64_t last_accepted_frame_index = -1;
     };
 
     /**
