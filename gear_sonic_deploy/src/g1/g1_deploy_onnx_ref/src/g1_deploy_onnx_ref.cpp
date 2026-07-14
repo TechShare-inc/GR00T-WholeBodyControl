@@ -2744,7 +2744,7 @@ class G1Deploy {
       dex3_hands_.writeOnce();
     }
 
-    /// Gracefully stop all threads and send a damping-only command.
+    /// Gracefully stop all threads and publish damping-only commands for one second.
     void Stop() {
       operator_state.stop = true;
       StopEmergencyStopListener();
@@ -2762,7 +2762,13 @@ class G1Deploy {
         }
       }
       CreateDampingCommand();
-      LowCommandWriter();
+      const auto damping_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+      auto next_publish = std::chrono::steady_clock::now();
+      do {
+        LowCommandWriter();
+        next_publish += std::chrono::microseconds(static_cast<int>(publish_dt_ * 1e6));
+        std::this_thread::sleep_until(next_publish);
+      } while (std::chrono::steady_clock::now() < damping_deadline);
       std::cout << "Stop" << std::endl;
     }
 
