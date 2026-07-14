@@ -65,6 +65,11 @@
 #include <chrono>
 #include <algorithm>
 #include <numeric>
+#include <atomic>
+#include <thread>
+
+#include <nlohmann/json.hpp>
+#include <zmq.hpp>
 
 // DDS
 #include <unitree/robot/channel/channel_publisher.hpp>
@@ -2135,6 +2140,53 @@ class G1Deploy {
   public:
     OperatorState operator_state;
 
+  private:
+    std::atomic<bool> emergency_listener_running_{false};
+    std::thread emergency_listener_thread_;
+
+  public:
+    void StartEmergencyStopListener(int port) {
+      if (port <= 0) { return; }
+      emergency_listener_running_.store(true);
+      emergency_listener_thread_ = std::thread([this, port]() {
+        try {
+          zmq::context_t context(1);
+          zmq::socket_t socket(context, zmq::socket_type::rep);
+          socket.set(zmq::sockopt::linger, 0);
+          socket.set(zmq::sockopt::rcvtimeo, 100);
+          socket.bind("tcp://127.0.0.1:" + std::to_string(port));
+          std::cout << "[EmergencyStop] Listening on loopback port " << port << std::endl;
+          while (emergency_listener_running_.load()) {
+            zmq::message_t request;
+            const auto received = socket.recv(request, zmq::recv_flags::none);
+            if (!received) { continue; }
+            nlohmann::json response = {{"status", "rejected"}};
+            try {
+              const auto command = nlohmann::json::parse(request.to_string());
+              if (command.value("version", 0) == 1 &&
+                  command.value("command", "") == "emergency_stop" &&
+                  !command.value("request_id", "").empty()) {
+                response = {{"status", "accepted"}, {"request_id", command["request_id"]}};
+                socket.send(zmq::buffer(response.dump()), zmq::send_flags::none);
+                operator_state.stop = true;
+                continue;
+              }
+            } catch (const nlohmann::json::exception&) {
+              response = {{"status", "rejected"}, {"error", "invalid request"}};
+            }
+            socket.send(zmq::buffer(response.dump()), zmq::send_flags::none);
+          }
+        } catch (const zmq::error_t& error) {
+          std::cerr << "[EmergencyStop] Listener failed: " << error.what() << std::endl;
+        }
+      });
+    }
+
+    void StopEmergencyStopListener() {
+      emergency_listener_running_.store(false);
+      if (emergency_listener_thread_.joinable()) { emergency_listener_thread_.join(); }
+    }
+
     G1Deploy(
       std::string networkInterface,
       std::string model_file_path,
@@ -2602,6 +2654,7 @@ class G1Deploy {
 
     ~G1Deploy()
     {
+      StopEmergencyStopListener();
       // CUDA resources are now cleaned up by the PolicyEngine and planner classes automatically
     }
 
@@ -2694,6 +2747,7 @@ class G1Deploy {
     /// Gracefully stop all threads and send a damping-only command.
     void Stop() {
       operator_state.stop = true;
+      StopEmergencyStopListener();
 
       if (control_thread_ptr_) {
         input_thread_ptr_->Wait();
@@ -4164,6 +4218,7 @@ int main(int argc, char const* argv[]) {
     std::cout << "  --zmq-verbose: enable ZMQ subscriber verbose logs" << std::endl;
     std::cout << "  --zmq-out-port <port>: ZMQ port for output (default: 5557)" << std::endl;
     std::cout << "  --zmq-out-topic <topic>: ZMQ topic/prefix for output (default: g1_debug)" << std::endl;
+    std::cout << "  --emergency-port <port>: loopback emergency-stop request port (default: disabled)" << std::endl;
     std::cout << "  --logs-dir <path>: optional logs output base directory (default: logs/<timestamp>/)" << std::endl;
     std::cout << "  --enable-csv-logs: enable writing CSV logs (default: OFF)" << std::endl;
     std::cout << "  --enable-motion-recording: enable motion recording for ZMQ/planner (default: OFF)" << std::endl;
@@ -4214,6 +4269,7 @@ int main(int argc, char const* argv[]) {
   bool enableMotionRecording = false;  // default off; enable with --enable-motion-recording
   int zmq_out_port = 5557;
   std::string zmq_out_topic = "g1_debug";
+  int emergency_port = 0;
   std::array<double, 3> initial_compliance = {0.5, 0.5, 0.0}; // initial compliance is 0.5 for both hands (keyboard controllable)
   double initial_max_close_ratio = 1.0; // default allows full closure, use --max-close-ratio to limit
   for (int i = 4; i < argc; i++) {
@@ -4320,6 +4376,8 @@ int main(int argc, char const* argv[]) {
       if (i + 1 < argc) { zmq_out_port = std::stoi(argv[i + 1]); i++; }
     } else if (std::string(argv[i]) == "--zmq-out-topic") {
       if (i + 1 < argc) { zmq_out_topic = argv[i + 1]; i++; }
+    } else if (std::string(argv[i]) == "--emergency-port") {
+      if (i + 1 < argc) { emergency_port = std::stoi(argv[i + 1]); i++; }
     } else if (std::string(argv[i]) == "--record-input-file") {
       if (i + 1 < argc) {
         recordInputFile = argv[i + 1];
@@ -4480,6 +4538,7 @@ int main(int argc, char const* argv[]) {
     initial_max_close_ratio
   );
   std::cout << "[DEBUG] G1Deploy object created successfully!" << std::endl;
+  custom.StartEmergencyStopListener(emergency_port);
   
   // Main application loop - check both operator_state.stop and ROS2 status if using ROS2
 #if HAS_ROS2
