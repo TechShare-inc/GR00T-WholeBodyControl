@@ -59,7 +59,13 @@ source .venv_sim/bin/activate
 echo "[INFO] Installing gear_sonic[sim] …"
 uv pip install -e "gear_sonic[sim]"
 
-# ── 5. Expose the bundled Unitree/CycloneDDS libraries to Python builds ──────
+# ── 5. Pull Git LFS objects for bundled CycloneDDS (gear_sonic_deploy) ────────
+if command -v git-lfs &>/dev/null; then
+    echo "[INFO] Pulling Git LFS objects in gear_sonic_deploy …"
+    (cd "$REPO_ROOT/gear_sonic_deploy" && git lfs pull)
+fi
+
+# ── 6. Expose the bundled Unitree/CycloneDDS libraries to Python builds ──────
 UNITREE_SDK2_DIR="$REPO_ROOT/gear_sonic_deploy/thirdparty/unitree_sdk2"
 UNITREE_DDS_DIR="$UNITREE_SDK2_DIR/thirdparty"
 
@@ -115,7 +121,7 @@ export LIBRARY_PATH="\$CYCLONEDDS_HOME/lib:\${LIBRARY_PATH:-}"
 EOF
 fi
 
-# ── 6. Install unitree_sdk2_python (needed by the sim ↔ WBC bridge) ──────────
+# ── 7. Install unitree_sdk2_python (needed by the sim ↔ WBC bridge) ──────────
 echo "[INFO] Installing unitree_sdk2_python …"
 uv pip install -e external_dependencies/unitree_sdk2_python
 
