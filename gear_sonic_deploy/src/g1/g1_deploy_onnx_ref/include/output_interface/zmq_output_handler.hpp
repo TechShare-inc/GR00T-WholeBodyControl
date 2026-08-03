@@ -207,14 +207,14 @@ public:
     void publish_control_status(const OutputInterface::ControlStatus& status) override {
         auto now = std::chrono::steady_clock::now();
         double elapsed = std::chrono::duration<double>(now - control_status_last_publish_time_).count();
-        if (elapsed < CONTROL_STATUS_INTERVAL_SEC) {
+        if (elapsed < CONTROL_STATUS_INTERVAL_SEC && status.playback_phase != "FAULT") {
             return;
         }
         control_status_last_publish_time_ = now;
 
         msgpack::sbuffer sbuf;
         msgpack::packer<msgpack::sbuffer> pk(&sbuf);
-        pk.pack_map(8);
+        pk.pack_map(11);
         pk.pack("instance_id");     pk.pack(status.instance_id);
         pk.pack("control_started"); pk.pack(status.control_started);
         pk.pack("control_stopped"); pk.pack(status.control_stopped);
@@ -223,6 +223,9 @@ public:
         pk.pack("stream_enabled");  pk.pack(status.stream_enabled);
         pk.pack("last_pose_age_s"); pk.pack(status.last_pose_age_s);
         pk.pack("last_accepted_frame_index"); pk.pack(status.last_accepted_frame_index);
+        pk.pack("playback_phase");     pk.pack(status.playback_phase);
+        pk.pack("playback_id");        pk.pack(status.playback_id);
+        pk.pack("heartbeat_sequence"); pk.pack(++control_status_sequence_);
         send_zmq_message(control_status_topic_, sbuf);
     }
 
@@ -276,6 +279,7 @@ private:
     // -- Control status heartbeat --
     static constexpr double CONTROL_STATUS_INTERVAL_SEC = 0.5;  ///< ~2 Hz
     std::chrono::steady_clock::time_point control_status_last_publish_time_;
+    uint64_t control_status_sequence_ = 0;
 
     /// Non-blocking send of [topic][msgpack payload] over the PUB socket.
     void send_zmq_message(const std::string& topic, const msgpack::sbuffer& sbuf) {
