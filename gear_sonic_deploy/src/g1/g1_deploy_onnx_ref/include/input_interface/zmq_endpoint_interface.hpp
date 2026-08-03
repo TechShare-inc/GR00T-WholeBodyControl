@@ -585,10 +585,44 @@ public:
       return last_receive_time_;
     }
 
-        std::optional<int64_t> GetLastAcceptedFrameIndex() const override {
+    std::optional<int64_t> GetLastAcceptedFrameIndex() const override {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        return last_accepted_frame_index_;
+    }
+
+    /**
+     * @brief Stop using the completed streamed clip as the policy reference.
+     *
+     * Normal playback completion is a control transition, not a request to
+     * keep evaluating the terminal action forever.  Keep streamed mode armed
+     * so the next playback can arrive without a mode toggle, but restore the
+     * loaded neutral reference while the controller owns return-to-stand.
+     */
+    void ReturnToReferenceMotion(
+        MotionDataReader& motion_reader,
+        std::shared_ptr<const MotionSequence>& current_motion,
+        int& current_frame,
+        bool& operator_play,
+        bool& reinitialize_heading,
+        std::mutex& current_motion_mutex) {
+        {
             std::lock_guard<std::mutex> lock(data_mutex_);
-            return last_accepted_frame_index_;
+            has_new_data_ = false;
+            ResetStreamedMotion();
         }
+        {
+            std::lock_guard<std::mutex> lock(current_motion_mutex);
+            has_external_token_state_ = false;
+            external_token_state_.SetData({});
+            operator_play = false;
+            reinitialize_heading = true;
+            current_motion = motion_reader.GetMotionShared(motion_reader.current_motion_index_);
+            current_frame = 0;
+            if (current_motion && current_motion->GetEncodeMode() >= 0) {
+                current_motion->SetEncodeMode(0);
+            }
+        }
+    }
     
 private:
     /// Reset the streamed motion buffer, merger state, and protocol version.

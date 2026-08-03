@@ -503,6 +503,25 @@ class ZMQManager : public InputInterface {
       return false;
     }
 
+    /// Restore the neutral reference while keeping streamed mode available.
+    void ReturnToReferenceMotion(
+        MotionDataReader& motion_reader,
+        std::shared_ptr<const MotionSequence>& current_motion,
+        int& current_frame,
+        OperatorState& operator_state,
+        bool& reinitialize_heading,
+        std::mutex& current_motion_mutex) {
+      if (pose_interface_) {
+        pose_interface_->ReturnToReferenceMotion(
+            motion_reader,
+            current_motion,
+            current_frame,
+            operator_state.play,
+            reinitialize_heading,
+            current_motion_mutex);
+      }
+    }
+
   private:
     // Handle planner mode input (similar to GamepadManager::handleGamepadPlannerInput)
     void handlePlannerInput(MotionDataReader& motion_reader,
