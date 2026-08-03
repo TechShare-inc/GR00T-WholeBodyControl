@@ -16,7 +16,11 @@ namespace {
 
 constexpr size_t kHeaderSize = 1280;
 
-std::vector<uint8_t> BuildCommand(bool playback_start, bool normal_completion) {
+std::vector<uint8_t> BuildCommand(
+    bool playback_start,
+    bool normal_completion,
+    bool stop = false,
+    int64_t playback_id = 17) {
   nlohmann::json header = {
       {"v", 1},
       {"endian", "le"},
@@ -36,10 +40,9 @@ std::vector<uint8_t> BuildCommand(bool playback_start, bool normal_completion) {
   message.insert(message.end(), {'c', 'o', 'm', 'm', 'a', 'n', 'd'});
   message.insert(message.end(), header_text.begin(), header_text.end());
   message.resize(message.size() + kHeaderSize - header_text.size(), 0);
-  message.insert(message.end(), {0, 0, 0,
+  message.insert(message.end(), {0, static_cast<uint8_t>(stop), 0,
                                  static_cast<uint8_t>(playback_start),
                                  static_cast<uint8_t>(normal_completion)});
-  const int64_t playback_id = 17;
   const int64_t terminal_frame_index = normal_completion ? 42 : -1;
   const auto append_i64 = [&message](int64_t value) {
     const auto offset = message.size();
@@ -183,6 +186,29 @@ TEST(ZMQPlaybackProtocolTest, LoopbackMarkersDriveControllerReturnToStandProtoco
   const auto accepted = manager.GetLastAcceptedFrameIndex();
   ASSERT_TRUE(accepted.has_value());
   ASSERT_EQ(*accepted, 42);
+
+  // A completion for another playback is consumed at the transport boundary,
+  // but must not move the controller protocol out of ACTION.
+  send(BuildCommand(false, true, false, 99));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  manager.update();
+  const auto mismatched_completion = manager.ConsumeNormalCompletionIfReady();
+  ASSERT_TRUE(mismatched_completion.has_value());
+  EXPECT_FALSE(protocol.request_return_to_stand(
+      mismatched_completion->playback_id,
+      mismatched_completion->terminal_frame_index,
+      *accepted,
+      measured,
+      t0));
+
+  // Stop and emergency input do not synthesize a normal-completion marker.
+  send(BuildCommand(false, false, true));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  manager.update();
+  EXPECT_FALSE(manager.ConsumeNormalCompletionIfReady().has_value());
+  manager.PushStdinChar('o');
+  manager.update();
+  EXPECT_FALSE(manager.ConsumeNormalCompletionIfReady().has_value());
 
   send(BuildCommand(false, true));
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
