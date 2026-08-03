@@ -146,6 +146,13 @@ class PlaybackProtocol {
     result.target_velocity.fill(0.0);
     result.feed_forward.fill(0.0);
 
+    if (phase_ == PlaybackPhase::STABLE_STANDING &&
+        (!low_state_fresh || !imu_fresh)) {
+      fault();
+      result.phase = phase_;
+      return result;
+    }
+
     if (phase_ == PlaybackPhase::RETURN_TO_STAND) {
       if (!low_state_fresh || !imu_fresh) {
         fault();
@@ -264,4 +271,3 @@ struct PlannerMessage {
   /// Used to detect planner timeouts (stale data → fallback to IDLE).
   std::chrono::steady_clock::time_point timestamp{};
 };
-

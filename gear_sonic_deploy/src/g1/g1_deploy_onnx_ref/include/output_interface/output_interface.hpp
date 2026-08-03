@@ -122,6 +122,8 @@ public:
       std::string manager_mode;          // "planner" or "streamed_motion"
       bool stream_enabled = false;       // ZMQEndpointInterface::use_zmq_stream
       double last_pose_age_s = -1.0;     // seconds since last ZMQ pose was received
+      double low_state_age_s = -1.0;     // seconds since the latest LowState sample
+      double imu_age_s = -1.0;           // seconds since the latest torso IMU sample
       int64_t last_accepted_frame_index = -1;
       std::string playback_phase = "STABLE_STANDING";
       int64_t playback_id = 0;
@@ -323,4 +325,3 @@ protected:
 };
 
 #endif // OUTPUT_INTERFACE_HPP
-

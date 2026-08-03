@@ -3338,6 +3338,8 @@ class G1Deploy {
         cs.control_stopped = operator_state.stop;
         cs.playback_phase = playback_protocol_.phase_name();
         cs.playback_id = playback_protocol_.active_playback_id();
+        cs.low_state_age_s = used_low_state_data_.GetAgeMs() / 1000.0;
+        cs.imu_age_s = used_imu_torso_data_.GetAgeMs() / 1000.0;
         cs.input_type = input_type_;
         if (auto* zm = dynamic_cast<ZMQManager*>(input_interface_.get())) {
           cs.manager_mode = (zm->GetActiveMode() == ZMQManager::ManagedMode::STREAMED_MOTION)
@@ -4230,6 +4232,8 @@ class G1Deploy {
               cs.control_stopped = operator_state.stop;
               cs.playback_phase = playback_protocol_.phase_name();
               cs.playback_id = playback_protocol_.active_playback_id();
+              cs.low_state_age_s = used_low_state_data_.GetAgeMs() / 1000.0;
+              cs.imu_age_s = used_imu_torso_data_.GetAgeMs() / 1000.0;
               cs.input_type = input_type_;
               if (auto* zm = dynamic_cast<ZMQManager*>(input_interface_.get())) {
                 cs.manager_mode = (zm->GetActiveMode() == ZMQManager::ManagedMode::STREAMED_MOTION)
