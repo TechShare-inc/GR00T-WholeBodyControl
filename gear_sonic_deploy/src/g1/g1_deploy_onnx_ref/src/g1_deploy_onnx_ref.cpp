@@ -2790,6 +2790,46 @@ class G1Deploy {
     }
 
     /**
+     * @brief Build a standing command with gains appropriate for the active
+     *        plant.
+     *
+     * The deployed hardware gains in `policy_parameters.hpp` are tuned for
+     * the physical G1.  The MuJoCo bridge models gravity directly and uses
+     * the gains from its simulation profile; sending the lower hardware
+     * gains during a static stand lets the waist and shoulders sag away from
+     * `default_angles`, so the controller can never observe STABLE_STANDING.
+     * CRC checking is disabled only for the MuJoCo lane, making it the
+     * existing explicit simulation discriminator.  Physical playback keeps
+     * the original gains unchanged.
+     */
+    void CreateStandingCommand(const PlaybackProtocol::JointArray& target_position) {
+      static constexpr std::array<float, G1_NUM_MOTOR> sim_standing_kps = {
+          150.0F, 150.0F, 150.0F, 200.0F, 40.0F, 40.0F,
+          150.0F, 150.0F, 150.0F, 200.0F, 40.0F, 40.0F,
+          250.0F, 250.0F, 250.0F,
+          100.0F, 100.0F, 40.0F, 40.0F, 20.0F, 20.0F, 20.0F,
+          100.0F, 100.0F, 40.0F, 40.0F, 20.0F, 20.0F, 20.0F};
+      static constexpr std::array<float, G1_NUM_MOTOR> sim_standing_kds = {
+          2.0F, 2.0F, 2.0F, 4.0F, 2.0F, 2.0F,
+          2.0F, 2.0F, 2.0F, 4.0F, 2.0F, 2.0F,
+          5.0F, 5.0F, 5.0F,
+          5.0F, 5.0F, 2.0F, 2.0F, 2.0F, 2.0F, 2.0F,
+          5.0F, 5.0F, 2.0F, 2.0F, 2.0F, 2.0F, 2.0F};
+      const auto& standing_kps = disable_crc_check_ ? sim_standing_kps : kps;
+      const auto& standing_kds = disable_crc_check_ ? sim_standing_kds : kds;
+
+      MotorCommand motor_command_tmp;
+      for (size_t i = 0; i < G1_NUM_MOTOR; ++i) {
+        motor_command_tmp.q_target.at(i) = static_cast<float>(target_position[i]);
+        motor_command_tmp.dq_target.at(i) = 0.0F;
+        motor_command_tmp.tau_ff.at(i) = 0.0F;
+        motor_command_tmp.kp.at(i) = standing_kps[i];
+        motor_command_tmp.kd.at(i) = standing_kds[i];
+      }
+      motor_command_buffer_.SetData(motor_command_tmp);
+    }
+
+    /**
      * @brief INIT state handler: ramp the robot from its current pose to the
      *        default standing angles over `duration_` seconds (linear interpolation).
      *
@@ -2803,22 +2843,14 @@ class G1Deploy {
       if (!ls) {
         return false;
       }
-      MotorCommand motor_command_tmp;
-      for (int i = 0; i < G1_NUM_MOTOR; ++i) {
-        motor_command_tmp.tau_ff.at(i) = 0.0;
-        motor_command_tmp.q_target.at(i) = static_cast<float>(default_angles[i]);
-        motor_command_tmp.dq_target.at(i) = 0.0;
-        motor_command_tmp.kp.at(i) = kps[i];
-        motor_command_tmp.kd.at(i) = kds[i];
-      }
+      PlaybackProtocol::JointArray target_position{};
       time_ += control_dt_;
+      const double ratio = std::clamp(time_ / duration_, 0.0, 1.0);
+      for (int i = 0; i < G1_NUM_MOTOR; ++i) {
+        const double current_pos = ls->motor_state()[i].q();
+        target_position[i] = current_pos * (1.0 - ratio) + default_angles[i] * ratio;
+      }
       if (time_ < duration_) {
-        for (int i = 0; i < G1_NUM_MOTOR; i++) {
-          double ratio = std::clamp(time_ / duration_, 0.0, 1.0);
-          double current_pos = ls->motor_state()[i].q();
-          motor_command_tmp.q_target.at(i) =
-              static_cast<float>(current_pos * (1.0 - ratio) + default_angles[i] * ratio);
-        }
         dex3_hands_.close(true);
         dex3_hands_.close(false);
       } else {
@@ -2827,7 +2859,7 @@ class G1Deploy {
         dex3_hands_.open(false);
         std::cout << "Init Done" << std::endl;
       }
-      motor_command_buffer_.SetData(motor_command_tmp);
+      CreateStandingCommand(target_position);
       return true;
     }
 
@@ -3240,6 +3272,13 @@ class G1Deploy {
                   *accepted,
                   measured_position)) {
             operator_state.play = false;
+            zm->ReturnToReferenceMotion(
+                motion_reader_,
+                current_motion_,
+                current_frame_,
+                operator_state,
+                reinitialize_heading_,
+                current_motion_mutex_);
           }
         }
       }
@@ -3253,8 +3292,17 @@ class G1Deploy {
       if (operator_state.stop) {
         return true;
       }
-      if (playback_protocol_.active_playback_id() <= 0 ||
-          playback_protocol_.phase() == PlaybackPhase::ACTION) {
+      if (playback_protocol_.phase() == PlaybackPhase::ACTION) {
+        return true;
+      }
+
+      // STABLE_STANDING is the controller's normal idle state as well as the
+      // post-playback hold state.  Keep the authoritative standing command
+      // active when no playback ID exists; otherwise the learned policy can
+      // drive the robot away from the neutral pose while it is waiting.
+      if (playback_protocol_.active_playback_id() <= 0 &&
+          playback_protocol_.phase() == PlaybackPhase::STABLE_STANDING) {
+        CreateStandingCommand(default_angles);
         return true;
       }
 
@@ -3280,15 +3328,7 @@ class G1Deploy {
         return true;
       }
 
-      MotorCommand motor_command_tmp;
-      for (size_t i = 0; i < G1_NUM_MOTOR; ++i) {
-        motor_command_tmp.q_target.at(i) = static_cast<float>(step.target_position[i]);
-        motor_command_tmp.dq_target.at(i) = 0.0;
-        motor_command_tmp.tau_ff.at(i) = 0.0;
-        motor_command_tmp.kp.at(i) = kps[i];
-        motor_command_tmp.kd.at(i) = kds[i];
-      }
-      motor_command_buffer_.SetData(motor_command_tmp);
+      CreateStandingCommand(step.target_position);
       return true;
     }
 
