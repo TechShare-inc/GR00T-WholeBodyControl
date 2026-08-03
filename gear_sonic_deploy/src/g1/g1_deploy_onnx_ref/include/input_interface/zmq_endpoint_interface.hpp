@@ -88,7 +88,7 @@
 class ZMQEndpointInterface : public InputInterface {
 public:
     /// Compile-time toggle for debug log output.
-    static constexpr bool DEBUG_LOGGING = true;
+    static constexpr bool DEBUG_LOGGING = false;
     
     // ------------------------------------------------------------------
     // Per-frame action flags (reset at the start of every update() call)
@@ -294,7 +294,12 @@ public:
                 reinitialize_heading = true;
                 auto temp_motion = std::make_shared<MotionSequence>(*current_motion);
                 temp_motion->name = "temporary_motion";
-                current_motion = temp_motion;
+                // Cache the planner-generated IDLE reference. SONIC uses this
+                // motion context to produce a closed-loop balancing command
+                // while no streamed action is active.
+                idle_reference_motion_ = temp_motion;
+                current_motion = idle_reference_motion_;
+                current_frame = 0;
                 if (has_planner && planner_state.enabled) {
                     planner_state.enabled = false;
                     planner_state.initialized = false;
@@ -440,7 +445,10 @@ public:
                     
                         
                         new_motion = result.motion;
-                        std::cout << "[ZMQEndpointInterface] motion name: " << new_motion->name << std::endl;
+                        if (verbose_) {
+                            std::cout << "[ZMQEndpointInterface] motion name: "
+                                      << new_motion->name << std::endl;
+                        }
                         stream_window_start_ = result.window_start;
                         frame_offset_adjustment = result.frame_offset_adjustment;
                         did_catchup = result.did_catchup_reset;
@@ -590,21 +598,41 @@ public:
         return last_accepted_frame_index_;
     }
 
+    /// Admit pose frames only after the controller accepts the matching
+    /// playback-start marker. Closing admission also discards any pose that
+    /// raced ahead of the lifecycle acknowledgement.
+    void SetPlaybackFrameAdmission(int64_t playback_id, bool admitted) {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        if (admitted && playback_id > 0) {
+            admitted_playback_id_ = playback_id;
+            return;
+        }
+        if (admitted_playback_id_ == playback_id) {
+            admitted_playback_id_ = 0;
+            has_new_data_ = false;
+            buffered_buffers_.clear();
+        }
+    }
+
     /**
      * @brief Stop using the completed streamed clip as the policy reference.
      *
      * Normal playback completion is a control transition, not a request to
      * keep evaluating the terminal action forever.  Keep streamed mode armed
      * so the next playback can arrive without a mode toggle, but restore the
-     * loaded neutral reference while the controller owns return-to-stand.
+     * cached planner IDLE reference while the controller owns return-to-stand.
      */
-    void ReturnToReferenceMotion(
-        MotionDataReader& motion_reader,
+    bool ReturnToReferenceMotion(
         std::shared_ptr<const MotionSequence>& current_motion,
         int& current_frame,
         bool& operator_play,
         bool& reinitialize_heading,
         std::mutex& current_motion_mutex) {
+        if (!idle_reference_motion_) {
+            std::cerr << "Cannot return to stand: planner IDLE reference is missing"
+                      << std::endl;
+            return false;
+        }
         {
             std::lock_guard<std::mutex> lock(data_mutex_);
             has_new_data_ = false;
@@ -616,12 +644,15 @@ public:
             external_token_state_.SetData({});
             operator_play = false;
             reinitialize_heading = true;
-            current_motion = motion_reader.GetMotionShared(motion_reader.current_motion_index_);
+            // Return to the IDLE planner context captured before streamed
+            // mode. A preloaded action is not a safe standing fallback.
+            current_motion = idle_reference_motion_;
             current_frame = 0;
             if (current_motion && current_motion->GetEncodeMode() >= 0) {
                 current_motion->SetEncodeMode(0);
             }
         }
+        return true;
     }
     
 private:
@@ -1853,12 +1884,17 @@ private:
         const std::vector<ZMQPackedMessageSubscriber::BufferView>& bufs) {
         
         std::lock_guard<std::mutex> lock(data_mutex_);
+
+        if (admitted_playback_id_ <= 0) {
+            return;
+        }
         
-        // Print message received info
-        std::cout << "[ZMQEndpointInterface] Received ZMQ message - topic: '" << topic 
-                  << "', protocol_version: " << hdr.version 
-                  << ", num_fields: " << hdr.fields.size() 
-                  << ", total_size: " << bufs.size() << " buffers" << std::endl;
+        if (verbose_) {
+            std::cout << "[ZMQEndpointInterface] Received ZMQ message - topic: '" << topic
+                      << "', protocol_version: " << hdr.version
+                      << ", num_fields: " << hdr.fields.size()
+                      << ", total_size: " << bufs.size() << " buffers" << std::endl;
+        }
         
         // Buffer the received data for processing in handle_input (main thread)
         buffered_header_ = hdr;
@@ -1905,6 +1941,9 @@ private:
     uint64_t receive_count_ = 0;       ///< Total number of messages received.
     uint64_t last_decode_time_ = 0;    ///< Timestamp of last DecodeIntoMotionSequence call (ms).
     std::optional<int64_t> last_accepted_frame_index_{};
+    int64_t admitted_playback_id_ = 0;
+    /// Planner-generated IDLE context used by SONIC for balanced standing.
+    std::shared_ptr<const MotionSequence> idle_reference_motion_{};
     
 };
 

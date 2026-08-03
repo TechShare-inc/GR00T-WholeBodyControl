@@ -2223,7 +2223,7 @@ class G1Deploy {
         planner_dt_(0.1),
         input_dt_(0.01),
         duration_(3.0),
-        playback_protocol_(default_angles, duration_),
+        playback_protocol_(duration_),
         counter_(0),
         mode_pr_(Mode::PR),
         mode_machine_(0),
@@ -2790,46 +2790,6 @@ class G1Deploy {
     }
 
     /**
-     * @brief Build a standing command with gains appropriate for the active
-     *        plant.
-     *
-     * The deployed hardware gains in `policy_parameters.hpp` are tuned for
-     * the physical G1.  The MuJoCo bridge models gravity directly and uses
-     * the gains from its simulation profile; sending the lower hardware
-     * gains during a static stand lets the waist and shoulders sag away from
-     * `default_angles`, so the controller can never observe STABLE_STANDING.
-     * CRC checking is disabled only for the MuJoCo lane, making it the
-     * existing explicit simulation discriminator.  Physical playback keeps
-     * the original gains unchanged.
-     */
-    void CreateStandingCommand(const PlaybackProtocol::JointArray& target_position) {
-      static constexpr std::array<float, G1_NUM_MOTOR> sim_standing_kps = {
-          150.0F, 150.0F, 150.0F, 200.0F, 40.0F, 40.0F,
-          150.0F, 150.0F, 150.0F, 200.0F, 40.0F, 40.0F,
-          250.0F, 250.0F, 250.0F,
-          100.0F, 100.0F, 40.0F, 40.0F, 20.0F, 20.0F, 20.0F,
-          100.0F, 100.0F, 40.0F, 40.0F, 20.0F, 20.0F, 20.0F};
-      static constexpr std::array<float, G1_NUM_MOTOR> sim_standing_kds = {
-          2.0F, 2.0F, 2.0F, 4.0F, 2.0F, 2.0F,
-          2.0F, 2.0F, 2.0F, 4.0F, 2.0F, 2.0F,
-          5.0F, 5.0F, 5.0F,
-          5.0F, 5.0F, 2.0F, 2.0F, 2.0F, 2.0F, 2.0F,
-          5.0F, 5.0F, 2.0F, 2.0F, 2.0F, 2.0F, 2.0F};
-      const auto& standing_kps = disable_crc_check_ ? sim_standing_kps : kps;
-      const auto& standing_kds = disable_crc_check_ ? sim_standing_kds : kds;
-
-      MotorCommand motor_command_tmp;
-      for (size_t i = 0; i < G1_NUM_MOTOR; ++i) {
-        motor_command_tmp.q_target.at(i) = static_cast<float>(target_position[i]);
-        motor_command_tmp.dq_target.at(i) = 0.0F;
-        motor_command_tmp.tau_ff.at(i) = 0.0F;
-        motor_command_tmp.kp.at(i) = standing_kps[i];
-        motor_command_tmp.kd.at(i) = standing_kds[i];
-      }
-      motor_command_buffer_.SetData(motor_command_tmp);
-    }
-
-    /**
      * @brief INIT state handler: ramp the robot from its current pose to the
      *        default standing angles over `duration_` seconds (linear interpolation).
      *
@@ -2843,14 +2803,22 @@ class G1Deploy {
       if (!ls) {
         return false;
       }
-      PlaybackProtocol::JointArray target_position{};
-      time_ += control_dt_;
-      const double ratio = std::clamp(time_ / duration_, 0.0, 1.0);
+      MotorCommand motor_command_tmp;
       for (int i = 0; i < G1_NUM_MOTOR; ++i) {
-        const double current_pos = ls->motor_state()[i].q();
-        target_position[i] = current_pos * (1.0 - ratio) + default_angles[i] * ratio;
+        motor_command_tmp.tau_ff.at(i) = 0.0;
+        motor_command_tmp.q_target.at(i) = static_cast<float>(default_angles[i]);
+        motor_command_tmp.dq_target.at(i) = 0.0;
+        motor_command_tmp.kp.at(i) = kps[i];
+        motor_command_tmp.kd.at(i) = kds[i];
       }
+      time_ += control_dt_;
       if (time_ < duration_) {
+        for (int i = 0; i < G1_NUM_MOTOR; i++) {
+          const double ratio = std::clamp(time_ / duration_, 0.0, 1.0);
+          const double current_pos = ls->motor_state()[i].q();
+          motor_command_tmp.q_target.at(i) =
+              static_cast<float>(current_pos * (1.0 - ratio) + default_angles[i] * ratio);
+        }
         dex3_hands_.close(true);
         dex3_hands_.close(false);
       } else {
@@ -2859,7 +2827,7 @@ class G1Deploy {
         dex3_hands_.open(false);
         std::cout << "Init Done" << std::endl;
       }
-      CreateStandingCommand(target_position);
+      motor_command_buffer_.SetData(motor_command_tmp);
       return true;
     }
 
@@ -3252,40 +3220,59 @@ class G1Deploy {
       }
 
       if (auto playback_start = zm->ConsumePlaybackStart(); playback_start.has_value()) {
-        playback_protocol_.start_action(*playback_start);
+        const auto low_state = used_low_state_data_.data;
+        bool admitted = false;
+        if (low_state) {
+          PlaybackProtocol::JointArray standing_position{};
+          for (size_t i = 0; i < G1_NUM_MOTOR; ++i) {
+            standing_position[i] = low_state->motor_state()[i].q();
+          }
+          admitted = playback_protocol_.start_action(*playback_start, standing_position);
+        }
+        zm->SetPlaybackFrameAdmission(*playback_start, admitted);
+      }
+
+      if (auto playback_abort = zm->ConsumePlaybackAbort(); playback_abort.has_value()) {
+        if (playback_protocol_.abort_action(*playback_abort)) {
+          zm->SetPlaybackFrameAdmission(*playback_abort, false);
+          operator_state.play = false;
+        }
       }
 
       if (operator_state.stop) {
         return;
       }
       if (auto completion = zm->ConsumeNormalCompletionIfReady(); completion.has_value()) {
-        PlaybackProtocol::JointArray measured_position{};
         const auto low_state = used_low_state_data_.data;
         const auto accepted = zm->GetLastAcceptedFrameIndex();
         if (low_state && accepted.has_value()) {
-          for (size_t i = 0; i < G1_NUM_MOTOR; ++i) {
-            measured_position[i] = low_state->motor_state()[i].q();
-          }
           if (playback_protocol_.request_return_to_stand(
                   completion->playback_id,
                   completion->terminal_frame_index,
                   *accepted,
-                  measured_position)) {
+                  PlaybackProtocol::Clock::now())) {
+            zm->SetPlaybackFrameAdmission(completion->playback_id, false);
             operator_state.play = false;
-            zm->ReturnToReferenceMotion(
-                motion_reader_,
-                current_motion_,
-                current_frame_,
-                operator_state,
-                reinitialize_heading_,
-                current_motion_mutex_);
+            if (!zm->ReturnToReferenceMotion(
+                    current_motion_,
+                    current_frame_,
+                    operator_state,
+                    reinitialize_heading_,
+                    current_motion_mutex_)) {
+              EnterPlaybackFault();
+            }
           }
         }
       }
     }
 
     /**
-     * @brief Apply controller-owned return-to-stand targets after policy inference.
+     * @brief Advance return-to-stand state after policy inference.
+     *
+     * The SONIC policy remains the motor-command owner throughout CONTROL.
+     * ProcessPlaybackMarkers() restores its planner-generated IDLE reference;
+     * this hook observes settling and handles faults without replacing the
+     * closed-loop balancing output with an open-loop joint PD command.
      * @return False when the protocol entered FAULT and damping must remain active.
      */
     bool ApplyPlaybackProtocol(const OperatorState& operator_state) {
@@ -3296,13 +3283,10 @@ class G1Deploy {
         return true;
       }
 
-      // STABLE_STANDING is the controller's normal idle state as well as the
-      // post-playback hold state.  Keep the authoritative standing command
-      // active when no playback ID exists; otherwise the learned policy can
-      // drive the robot away from the neutral pose while it is waiting.
+      // No playback lifecycle is active. CreatePolicyCommand() has already
+      // produced SONIC's balancing command from the cached IDLE reference.
       if (playback_protocol_.active_playback_id() <= 0 &&
           playback_protocol_.phase() == PlaybackPhase::STABLE_STANDING) {
-        CreateStandingCommand(default_angles);
         return true;
       }
 
@@ -3316,20 +3300,53 @@ class G1Deploy {
           used_low_state_data_.GetAgeMs() <= LOW_STATE_ABSENT_THRESHOLD.count();
       const bool imu_fresh = used_imu_torso_data_.GetAgeMs() >= 0.0 &&
           used_imu_torso_data_.GetAgeMs() <= LOW_STATE_ABSENT_THRESHOLD.count();
+
+      bool body_stable = false;
+      if (used_imu_torso_data_.data) {
+        constexpr double kMaxTorsoTiltRad = 0.35;
+        constexpr double kMaxTorsoAngularVelocity = 0.35;
+        const auto quaternion = used_imu_torso_data_.data->quaternion();
+        const double w = quaternion[0];
+        const double x = quaternion[1];
+        const double y = quaternion[2];
+        const double z = quaternion[3];
+        const double norm_squared = w * w + x * x + y * y + z * z;
+        if (norm_squared > 1e-12) {
+          const double upright_alignment =
+              1.0 - 2.0 * (x * x + y * y) / norm_squared;
+          const auto angular_velocity = used_imu_torso_data_.data->gyroscope();
+          body_stable = upright_alignment >= std::cos(kMaxTorsoTiltRad) &&
+              std::abs(angular_velocity[0]) <= kMaxTorsoAngularVelocity &&
+              std::abs(angular_velocity[1]) <= kMaxTorsoAngularVelocity &&
+              std::abs(angular_velocity[2]) <= kMaxTorsoAngularVelocity;
+        }
+      }
       const auto step = playback_protocol_.update(
-          measured_position, measured_velocity, low_state_fresh, imu_fresh);
+          measured_position, measured_velocity, low_state_fresh, imu_fresh,
+          PlaybackProtocol::Clock::now(), body_stable);
 
       if (step.phase == PlaybackPhase::FAULT) {
+        if (auto* zm = dynamic_cast<ZMQManager*>(input_interface_.get())) {
+          zm->SetPlaybackFrameAdmission(playback_protocol_.active_playback_id(), false);
+        }
         CreateDampingCommand();
         return false;
       }
-      if (step.phase != PlaybackPhase::RETURN_TO_STAND &&
-          step.phase != PlaybackPhase::STABLE_STANDING) {
-        return true;
-      }
-
-      CreateStandingCommand(step.target_position);
+      // During RETURN_TO_STAND and STABLE_STANDING, preserve the policy
+      // command generated from the restored IDLE reference. The protocol
+      // verifies that the robot has returned to its pre-action equilibrium.
       return true;
+    }
+
+    /// Enter the fail-closed playback state and revoke all pose-frame admission.
+    void EnterPlaybackFault() {
+      const int64_t playback_id = playback_protocol_.active_playback_id();
+      playback_protocol_.fault();
+      if (playback_id > 0) {
+        if (auto* zm = dynamic_cast<ZMQManager*>(input_interface_.get())) {
+          zm->SetPlaybackFrameAdmission(playback_id, false);
+        }
+      }
     }
 
     /// Publish an immediate FAULT heartbeat after a safety or state-loss failure.
@@ -3630,7 +3647,6 @@ class G1Deploy {
         } else {
           if (current_frame_ >= current_motion_->timesteps - saved_frame_for_observation_window_) {
             current_frame_ = current_frame_ - 1;
-            std::cout << "Motion " << current_motion_->name << " completed and waiting following motion" << std::endl;                    
           }
         }
       }
@@ -4050,7 +4066,7 @@ class G1Deploy {
         case ProgramState::WAIT_FOR_CONTROL:
           if (!CheckSafety()) {
             std::cout << "[ERROR] Safety check failed, cannot start control." << std::endl;
-            playback_protocol_.fault();
+            EnterPlaybackFault();
             operator_state.stop = true;
             PublishPlaybackFaultHeartbeat(operator_state);
             break;
@@ -4070,6 +4086,7 @@ class G1Deploy {
               warn_count++;
             }
             std::cout << "[Control] DEBUG: operator_state.start=true, transitioning to CONTROL state" << std::endl;
+            playback_protocol_.begin_standing_qualification();
             program_state_ = ProgramState::CONTROL;
           }
           break;
@@ -4077,7 +4094,7 @@ class G1Deploy {
         case ProgramState::CONTROL: {
           if (!CheckSafety()) {
             std::cout << "[ERROR] Safety check failed, stopping control." << std::endl;
-            playback_protocol_.fault();
+            EnterPlaybackFault();
             operator_state.stop = true;
             PublishPlaybackFaultHeartbeat(operator_state);
             break;
@@ -4090,7 +4107,7 @@ class G1Deploy {
 
           if (!GatherRobotStateToLogger()) {
             std::cout << "✗ Error: Failed to gather robot state to logger in the middle of the control loop!" << std::endl;
-            playback_protocol_.fault();
+            EnterPlaybackFault();
             operator_state.stop = true;
             PublishPlaybackFaultHeartbeat(operator_state);
             std::cout << "Stopping control system." << std::endl;
@@ -4139,7 +4156,7 @@ class G1Deploy {
           }
 
           if (!GatherInputInterfaceData()) {
-            playback_protocol_.fault();
+            EnterPlaybackFault();
             operator_state.stop = true;
             PublishPlaybackFaultHeartbeat(operator_state);
             return;
@@ -4173,7 +4190,7 @@ class G1Deploy {
             if (!GatherObservations()) {
               std::cout << "✗ Error: Failed to gather observations in the middle of the control loop!" << std::endl;
               std::cout << "Stopping control system." << std::endl;
-              playback_protocol_.fault();
+              EnterPlaybackFault();
               operator_state.stop = true;
               PublishPlaybackFaultHeartbeat(operator_state);
               return;
@@ -4194,7 +4211,7 @@ class G1Deploy {
           if (!CreatePolicyCommand()) {
             std::cout << "✗ Error: Failed to create policy command in the middle of the control loop!" << std::endl;
             std::cout << "Stopping control system." << std::endl;
-            playback_protocol_.fault();
+            EnterPlaybackFault();
             operator_state.stop = true;
             PublishPlaybackFaultHeartbeat(operator_state);
             return;
@@ -4321,7 +4338,7 @@ class G1Deploy {
           if (!CurrentFrameAdvancement()) {
             std::cout << "✗ Error: Failed to advance current frame in the middle of the control loop!" << std::endl;
             std::cout << "Stopping control system." << std::endl;
-            playback_protocol_.fault();
+            EnterPlaybackFault();
             operator_state.stop = true;
             PublishPlaybackFaultHeartbeat(operator_state);
             return;

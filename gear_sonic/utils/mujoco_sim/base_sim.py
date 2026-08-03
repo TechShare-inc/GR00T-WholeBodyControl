@@ -524,7 +524,15 @@ class DefaultEnv:
         return self_collision
 
     def reset(self):
+        simulation_time = float(self.mj_data.time)
         mujoco.mj_resetData(self.mj_model, self.mj_data)
+        # A fall reset is a state recovery inside the same simulator session,
+        # not a new clock epoch. Keeping time monotonic prevents downstream
+        # controllers from observing a discontinuous timestamp.
+        self.mj_data.time = simulation_time
+        if self.config.get("ENABLE_ELASTIC_BAND", False) and self.elastic_band is not None:
+            self.elastic_band.enable = True
+        mujoco.mj_forward(self.mj_model, self.mj_data)
 
 
 class BaseSimulator:
@@ -599,38 +607,66 @@ class BaseSimulator:
         """Main simulation loop"""
         sim_cnt = 0
         ts = time.time()
+        next_step_at = time.monotonic()
+        viewer_stride = max(1, int(round(self.viewer_dt / self.sim_dt)))
+        # An onscreen loop must yield to the passive viewer at least once per
+        # render interval. Headless operation can retain a larger recovery
+        # window because there is no UI thread to starve.
+        max_catchup_steps = (
+            viewer_stride
+            if self.sim_env.viewer is not None
+            else max(1, int(round(0.25 / self.sim_dt)))
+        )
 
         try:
             while self._running and (
                 (self.sim_env.viewer and self.sim_env.viewer.is_running())
                 or (self.sim_env.viewer is None)
             ):
-                step_start = time.monotonic()
+                now_monotonic = time.monotonic()
+                if now_monotonic < next_step_at:
+                    time.sleep(next_step_at - now_monotonic)
+                    continue
 
-                self.sim_env.sim_step()
-                now = time.time()
-                if now - ts > 1 / 10.0 and self.redis_client is not None:
-                    head_pose = self.sim_env.get_head_pose()
-                    self.redis_client.set("head_pos", pickle.dumps(head_pose[:3]))
-                    self.redis_client.set("head_quat", pickle.dumps(head_pose[3:]))
-                    ts = now
+                viewer_due = False
+                reward_due = False
+                image_due = False
+                steps = 0
+                while (
+                    self._running
+                    and time.monotonic() >= next_step_at
+                    and steps < max_catchup_steps
+                ):
+                    self.sim_env.sim_step()
+                    now = time.time()
+                    if now - ts > 1 / 10.0 and self.redis_client is not None:
+                        head_pose = self.sim_env.get_head_pose()
+                        self.redis_client.set("head_pos", pickle.dumps(head_pose[:3]))
+                        self.redis_client.set("head_quat", pickle.dumps(head_pose[3:]))
+                        ts = now
 
-                if sim_cnt % int(self.viewer_dt / self.sim_dt) == 0:
+                    if sim_cnt % viewer_stride == 0:
+                        viewer_due = True
+                    if sim_cnt % int(self.reward_dt / self.sim_dt) == 0:
+                        reward_due = True
+                    if sim_cnt % int(self.image_dt / self.sim_dt) == 0:
+                        image_due = True
+
+                    sim_cnt += 1
+                    steps += 1
+                    next_step_at += self.sim_dt
+
+                # Render and refresh auxiliary outputs once at the newest state.
+                if viewer_due:
                     self.sim_env.update_viewer()
-
-                if sim_cnt % int(self.reward_dt / self.sim_dt) == 0:
+                if reward_due:
                     self.sim_env.update_reward()
-
-                if sim_cnt % int(self.image_dt / self.sim_dt) == 0:
+                if image_due:
                     self.sim_env.update_render_caches()
 
-                # Simple rate limiter (replaces ROS rate)
-                elapsed = time.monotonic() - step_start
-                sleep_time = self.sim_dt - elapsed
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
-
-                sim_cnt += 1
+                # Bound recovery work after a long pause or render stall.
+                if time.monotonic() >= next_step_at:
+                    next_step_at = time.monotonic() + self.sim_dt
         except KeyboardInterrupt:
             print("Simulator interrupted by user.")
         finally:

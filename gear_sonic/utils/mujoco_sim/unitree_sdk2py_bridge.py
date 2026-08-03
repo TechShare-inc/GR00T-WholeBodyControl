@@ -89,18 +89,23 @@ class UnitreeSdk2Bridge:
         self.right_hand_state_puber.Init()
 
         self.low_cmd_suber = ChannelSubscriber("rt/lowcmd", LowCmd_)
-        self.low_cmd_suber.Init(self.LowCmdHandler, 1)
-
         self.left_hand_cmd = HandCmd_default()
         self.left_hand_cmd_suber = ChannelSubscriber("rt/dex3/left/cmd", HandCmd_)
-        self.left_hand_cmd_suber.Init(self.LeftHandCmdHandler, 1)
         self.right_hand_cmd = HandCmd_default()
         self.right_hand_cmd_suber = ChannelSubscriber("rt/dex3/right/cmd", HandCmd_)
-        self.right_hand_cmd_suber.Init(self.RightHandCmdHandler, 1)
 
         self.low_cmd_lock = threading.Lock()
         self.left_hand_cmd_lock = threading.Lock()
         self.right_hand_cmd_lock = threading.Lock()
+        self.reset()
+
+        # Initialize callback state before starting DDS reader threads.  The
+        # SDK may invoke a callback immediately from Init(), so constructing
+        # locks and flags after Init() creates a startup race that can kill the
+        # reader thread before the first command is accepted.
+        self.low_cmd_suber.Init(self.LowCmdHandler, 1)
+        self.left_hand_cmd_suber.Init(self.LeftHandCmdHandler, 1)
+        self.right_hand_cmd_suber.Init(self.RightHandCmdHandler, 1)
 
         self.wireless_controller = unitree_go_msg_dds__WirelessController_()
         self.wireless_controller_puber = ChannelPublisher(
@@ -128,8 +133,6 @@ class UnitreeSdk2Bridge:
             "left": 15,
         }
         self.joystick = None
-
-        self.reset()
 
     def reset(self):
         with self.low_cmd_lock:
@@ -406,8 +409,9 @@ class ElasticBand:
             self.length += 0.1
         if key == glfw.KEY_9:
             self.enable = not self.enable
+            print(f"ElasticBand enable: {self.enable}", flush=True)
 
     def handle_keyboard_button(self, key):
         if key == "9":
             self.enable = not self.enable
-            print(f"ElasticBand enable: {self.enable}")
+            print(f"ElasticBand enable: {self.enable}", flush=True)

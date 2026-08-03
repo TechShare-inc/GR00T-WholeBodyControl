@@ -45,6 +45,7 @@ struct CommandMessage {
                           ///< false → streamed-motion mode  (use pose topic)
   bool playback_start = false;       ///< Begins a controller-correlated playback.
   bool normal_completion = false;    ///< Requests the controller-owned return-to-stand.
+  bool playback_abort = false;       ///< Abnormally terminates playback into FAULT.
   int64_t playback_id = 0;           ///< Correlation ID for playback lifecycle markers.
   int64_t terminal_frame_index = -1; ///< Last frame that must be accepted before return.
   /// Optional absolute heading override (radians).  When set, the value is
@@ -60,10 +61,10 @@ struct CommandMessage {
  * @brief Safety state machine for streamed playback completion.
  *
  * A normal completion is accepted only after the controller has accepted the
- * matching terminal frame. The return ramp starts at measured joint positions
- * and uses the same duration as the deployment INIT ramp. Stale state during
- * the return fails closed into FAULT; stop and emergency paths are outside
- * this protocol and never request a stand.
+ * matching terminal frame. The policy then runs from the restored planner IDLE
+ * context for a minimum recovery interval and settling hold. Stale state
+ * during the return fails closed into FAULT; stop and emergency paths are
+ * outside this protocol and never request a stand.
  */
 enum class PlaybackPhase {
   ACTION,
@@ -90,47 +91,75 @@ class PlaybackProtocol {
 
   struct StepResult {
     PlaybackPhase phase = PlaybackPhase::STABLE_STANDING;
-    JointArray target_position{};
-    JointArray target_velocity{};
-    JointArray feed_forward{};
   };
 
   explicit PlaybackProtocol(
-      JointArray default_angles,
       double return_duration_s = 3.0,
       double position_tolerance = 0.05,
       double velocity_tolerance = 0.10,
-      double stable_hold_s = 0.25)
-      : default_angles_(default_angles),
-        return_duration_s_(std::max(0.001, return_duration_s)),
+      double stable_hold_s = 0.25,
+      double max_recovery_displacement = 1.0,
+      double return_timeout_s = 10.0)
+      : return_duration_s_(std::max(0.001, return_duration_s)),
         position_tolerance_(std::max(0.0, position_tolerance)),
         velocity_tolerance_(std::max(0.0, velocity_tolerance)),
-        stable_hold_s_(std::max(0.0, stable_hold_s)) {}
+        stable_hold_s_(std::max(0.0, stable_hold_s)),
+        max_recovery_displacement_(std::max(0.0, max_recovery_displacement)),
+        return_timeout_s_(std::max(
+            return_duration_s_ + stable_hold_s_, return_timeout_s)) {}
 
-  void start_action(int64_t playback_id) {
-    if (playback_id <= 0 || phase_ != PlaybackPhase::STABLE_STANDING) {
-      return;
+  bool start_action(int64_t playback_id, const JointArray& standing_position) {
+    if (playback_id <= 0) {
+      return false;
+    }
+    if (phase_ == PlaybackPhase::ACTION && playback_id == active_playback_id_) {
+      return true;
+    }
+    if (phase_ != PlaybackPhase::STABLE_STANDING) {
+      return false;
     }
     active_playback_id_ = playback_id;
+    standing_reference_position_ = standing_position;
     phase_ = PlaybackPhase::ACTION;
     stable_since_.reset();
+    settled_reference_position_.reset();
+    qualification_reference_pending_ = false;
+    return true;
+  }
+
+  void begin_standing_qualification(Clock::time_point now = Clock::now()) {
+    active_playback_id_ = 0;
+    return_started_at_ = now;
+    stable_since_.reset();
+    settled_reference_position_.reset();
+    qualification_reference_pending_ = true;
+    phase_ = PlaybackPhase::RETURN_TO_STAND;
   }
 
   bool request_return_to_stand(
       int64_t playback_id,
       int64_t terminal_frame_index,
       int64_t last_accepted_frame_index,
-      const JointArray& measured_position,
       Clock::time_point now = Clock::now()) {
     if (phase_ != PlaybackPhase::ACTION || playback_id <= 0 ||
         playback_id != active_playback_id_ || terminal_frame_index < 0 ||
         last_accepted_frame_index < terminal_frame_index) {
       return false;
     }
-    ramp_start_position_ = measured_position;
-    ramp_started_at_ = now;
+    return_started_at_ = now;
     stable_since_.reset();
+    settled_reference_position_.reset();
+    qualification_reference_pending_ = false;
     phase_ = PlaybackPhase::RETURN_TO_STAND;
+    return true;
+  }
+
+  bool abort_action(int64_t playback_id) {
+    if (phase_ != PlaybackPhase::ACTION || playback_id <= 0 ||
+        playback_id != active_playback_id_) {
+      return false;
+    }
+    fault();
     return true;
   }
 
@@ -139,12 +168,10 @@ class PlaybackProtocol {
       const JointArray& measured_velocity,
       bool low_state_fresh,
       bool imu_fresh,
-      Clock::time_point now = Clock::now()) {
+      Clock::time_point now = Clock::now(),
+      bool body_stable = true) {
     StepResult result;
     result.phase = phase_;
-    result.target_position = default_angles_;
-    result.target_velocity.fill(0.0);
-    result.feed_forward.fill(0.0);
 
     if (phase_ == PlaybackPhase::STABLE_STANDING &&
         (!low_state_fresh || !imu_fresh)) {
@@ -160,28 +187,50 @@ class PlaybackProtocol {
         return result;
       }
 
-      const double elapsed = std::chrono::duration<double>(now - ramp_started_at_).count();
-      const double ratio = std::clamp(elapsed / return_duration_s_, 0.0, 1.0);
-      for (size_t i = 0; i < kJointCount; ++i) {
-        result.target_position[i] =
-            ramp_start_position_[i] * (1.0 - ratio) + default_angles_[i] * ratio;
+      if (qualification_reference_pending_) {
+        standing_reference_position_ = measured_position;
+        qualification_reference_pending_ = false;
       }
 
-      if (ratio >= 1.0) {
-        bool settled = true;
+      const double elapsed =
+          std::chrono::duration<double>(now - return_started_at_).count();
+      if (elapsed >= return_timeout_s_) {
+        fault();
+        result.phase = phase_;
+        return result;
+      }
+      if (elapsed >= return_duration_s_) {
+        bool velocity_settled_and_recoverable = true;
         for (size_t i = 0; i < kJointCount; ++i) {
-          settled = settled &&
-              std::abs(measured_position[i] - default_angles_[i]) <= position_tolerance_ &&
+          velocity_settled_and_recoverable = velocity_settled_and_recoverable &&
+              std::abs(measured_position[i] - standing_reference_position_[i]) <=
+                  max_recovery_displacement_ &&
               std::abs(measured_velocity[i]) <= velocity_tolerance_;
         }
-        if (!settled) {
+        if (!velocity_settled_and_recoverable || !body_stable) {
           stable_since_.reset();
+          settled_reference_position_.reset();
         } else if (!stable_since_.has_value()) {
           stable_since_ = now;
-        } else if (std::chrono::duration<double>(now - *stable_since_).count() >= stable_hold_s_) {
-          phase_ = PlaybackPhase::STABLE_STANDING;
-          result.phase = phase_;
-          result.target_position = default_angles_;
+          settled_reference_position_ = measured_position;
+        } else if (!settled_reference_position_.has_value()) {
+          stable_since_ = now;
+          settled_reference_position_ = measured_position;
+        } else {
+          bool position_settled = true;
+          for (size_t i = 0; i < kJointCount; ++i) {
+            position_settled = position_settled &&
+                std::abs(measured_position[i] - (*settled_reference_position_)[i]) <=
+                    position_tolerance_;
+          }
+          if (!position_settled) {
+            stable_since_ = now;
+            settled_reference_position_ = measured_position;
+          } else if (std::chrono::duration<double>(now - *stable_since_).count() >=
+                     stable_hold_s_) {
+            phase_ = PlaybackPhase::STABLE_STANDING;
+            result.phase = phase_;
+          }
         }
       }
       result.phase = phase_;
@@ -196,20 +245,22 @@ class PlaybackProtocol {
 
   PlaybackPhase phase() const { return phase_; }
   int64_t active_playback_id() const { return active_playback_id_; }
-  const JointArray& default_angles() const { return default_angles_; }
   const char* phase_name() const { return PlaybackPhaseName(phase_); }
 
  private:
-  JointArray default_angles_;
-  JointArray ramp_start_position_{};
+  JointArray standing_reference_position_{};
   double return_duration_s_;
   double position_tolerance_;
   double velocity_tolerance_;
   double stable_hold_s_;
+  double max_recovery_displacement_;
+  double return_timeout_s_;
   int64_t active_playback_id_ = 0;
   PlaybackPhase phase_ = PlaybackPhase::STABLE_STANDING;
-  Clock::time_point ramp_started_at_{};
+  Clock::time_point return_started_at_{};
   std::optional<Clock::time_point> stable_since_;
+  std::optional<JointArray> settled_reference_position_;
+  bool qualification_reference_pending_ = false;
 };
 
 // ---------------------------------------------------------------------------
