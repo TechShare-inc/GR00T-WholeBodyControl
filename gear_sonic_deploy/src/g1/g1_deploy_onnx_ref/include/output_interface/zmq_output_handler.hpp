@@ -214,7 +214,7 @@ public:
 
         msgpack::sbuffer sbuf;
         msgpack::packer<msgpack::sbuffer> pk(&sbuf);
-        pk.pack_map(11);
+        pk.pack_map(13);
         pk.pack("instance_id");     pk.pack(status.instance_id);
         pk.pack("control_started"); pk.pack(status.control_started);
         pk.pack("control_stopped"); pk.pack(status.control_stopped);
@@ -222,6 +222,8 @@ public:
         pk.pack("manager_mode");    pk.pack(status.manager_mode);
         pk.pack("stream_enabled");  pk.pack(status.stream_enabled);
         pk.pack("last_pose_age_s"); pk.pack(status.last_pose_age_s);
+        pk.pack("low_state_age_s"); pk.pack(status.low_state_age_s);
+        pk.pack("imu_age_s");       pk.pack(status.imu_age_s);
         pk.pack("last_accepted_frame_index"); pk.pack(status.last_accepted_frame_index);
         pk.pack("playback_phase");     pk.pack(status.playback_phase);
         pk.pack("playback_id");        pk.pack(status.playback_id);
