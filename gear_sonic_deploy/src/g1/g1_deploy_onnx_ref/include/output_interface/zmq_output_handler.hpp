@@ -121,7 +121,7 @@
  */
 class ZMQOutputHandler : public OutputInterface {
 public:
-    static constexpr bool DEBUG_LOGGING = true;
+    static constexpr bool DEBUG_LOGGING = false;
 
     /**
      * @brief Construct the handler: create a ZMQ PUB socket and bind to the given port.
