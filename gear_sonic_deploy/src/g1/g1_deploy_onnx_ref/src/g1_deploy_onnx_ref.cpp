@@ -181,6 +181,7 @@ class G1Deploy {
     double planner_dt_;    ///< Planner loop period  (10 Hz = 0.1 s).
     double input_dt_;      ///< Input poll period    (100 Hz = 0.01 s).
     double duration_;      ///< Duration of the INIT ramp-up to default pose (3 s).
+    PlaybackProtocol playback_protocol_; ///< Controller-owned playback lifecycle.
     int counter_;          ///< General-purpose tick counter.
     Mode mode_pr_;         ///< Ankle control mode (series PR vs. parallel AB).
     uint8_t mode_machine_; ///< Robot variant code received from LowState.
@@ -2222,6 +2223,7 @@ class G1Deploy {
         planner_dt_(0.1),
         input_dt_(0.01),
         duration_(3.0),
+        playback_protocol_(default_angles, duration_),
         counter_(0),
         mode_pr_(Mode::PR),
         mode_machine_(0),
@@ -3202,6 +3204,129 @@ class G1Deploy {
     }
 
     /**
+     * @brief Consume and validate controller-correlated playback lifecycle markers.
+     *
+     * Marker handling is deliberately separate from operator stop handling:
+     * normal completion can request a stand, while stop/emergency/fault paths
+     * never enter this transition.
+     */
+    void ProcessPlaybackMarkers(OperatorState& operator_state) {
+      if (operator_state.stop) {
+        return;
+      }
+      auto* zm = dynamic_cast<ZMQManager*>(input_interface_.get());
+      if (!zm) {
+        return;
+      }
+
+      if (auto playback_start = zm->ConsumePlaybackStart(); playback_start.has_value()) {
+        playback_protocol_.start_action(*playback_start);
+      }
+
+      if (operator_state.stop) {
+        return;
+      }
+      if (auto completion = zm->ConsumeNormalCompletionIfReady(); completion.has_value()) {
+        PlaybackProtocol::JointArray measured_position{};
+        const auto low_state = used_low_state_data_.data;
+        const auto accepted = zm->GetLastAcceptedFrameIndex();
+        if (low_state && accepted.has_value()) {
+          for (size_t i = 0; i < G1_NUM_MOTOR; ++i) {
+            measured_position[i] = low_state->motor_state()[i].q();
+          }
+          if (playback_protocol_.request_return_to_stand(
+                  completion->playback_id,
+                  completion->terminal_frame_index,
+                  *accepted,
+                  measured_position)) {
+            operator_state.play = false;
+          }
+        }
+      }
+    }
+
+    /**
+     * @brief Apply controller-owned return-to-stand targets after policy inference.
+     * @return False when the protocol entered FAULT and damping must remain active.
+     */
+    bool ApplyPlaybackProtocol(const OperatorState& operator_state) {
+      if (operator_state.stop) {
+        return true;
+      }
+      if (playback_protocol_.active_playback_id() <= 0 ||
+          playback_protocol_.phase() == PlaybackPhase::ACTION) {
+        return true;
+      }
+
+      PlaybackProtocol::JointArray measured_position{};
+      PlaybackProtocol::JointArray measured_velocity{};
+      for (size_t i = 0; i < G1_NUM_MOTOR; ++i) {
+        measured_position[i] = used_low_state_data_.data->motor_state()[i].q();
+        measured_velocity[i] = used_low_state_data_.data->motor_state()[i].dq();
+      }
+      const bool low_state_fresh = used_low_state_data_.GetAgeMs() >= 0.0 &&
+          used_low_state_data_.GetAgeMs() <= LOW_STATE_ABSENT_THRESHOLD.count();
+      const bool imu_fresh = used_imu_torso_data_.GetAgeMs() >= 0.0 &&
+          used_imu_torso_data_.GetAgeMs() <= LOW_STATE_ABSENT_THRESHOLD.count();
+      const auto step = playback_protocol_.update(
+          measured_position, measured_velocity, low_state_fresh, imu_fresh);
+
+      if (step.phase == PlaybackPhase::FAULT) {
+        CreateDampingCommand();
+        return false;
+      }
+      if (step.phase != PlaybackPhase::RETURN_TO_STAND &&
+          step.phase != PlaybackPhase::STABLE_STANDING) {
+        return true;
+      }
+
+      MotorCommand motor_command_tmp;
+      for (size_t i = 0; i < G1_NUM_MOTOR; ++i) {
+        motor_command_tmp.q_target.at(i) = static_cast<float>(step.target_position[i]);
+        motor_command_tmp.dq_target.at(i) = 0.0;
+        motor_command_tmp.tau_ff.at(i) = 0.0;
+        motor_command_tmp.kp.at(i) = kps[i];
+        motor_command_tmp.kd.at(i) = kds[i];
+      }
+      motor_command_buffer_.SetData(motor_command_tmp);
+      return true;
+    }
+
+    /// Publish an immediate FAULT heartbeat after a safety or state-loss failure.
+    void PublishPlaybackFaultHeartbeat(const OperatorState& operator_state) {
+      for (auto& output_interface : output_interfaces_) {
+        if (!output_interface) {
+          continue;
+        }
+        OutputInterface::ControlStatus cs;
+        cs.instance_id = deploy_instance_id_;
+        cs.control_started = operator_state.start;
+        cs.control_stopped = operator_state.stop;
+        cs.playback_phase = playback_protocol_.phase_name();
+        cs.playback_id = playback_protocol_.active_playback_id();
+        cs.input_type = input_type_;
+        if (auto* zm = dynamic_cast<ZMQManager*>(input_interface_.get())) {
+          cs.manager_mode = (zm->GetActiveMode() == ZMQManager::ManagedMode::STREAMED_MOTION)
+                                ? "streamed_motion" : "planner";
+          cs.stream_enabled = zm->IsStreamEnabled();
+        } else {
+          cs.manager_mode = "unknown";
+          cs.stream_enabled = false;
+        }
+        auto last_pose = input_interface_->GetLastUpdateTime();
+        if (last_pose.has_value()) {
+          cs.last_pose_age_s = std::chrono::duration<double>(
+              std::chrono::steady_clock::now() - *last_pose).count();
+        }
+        auto last_frame = input_interface_->GetLastAcceptedFrameIndex();
+        if (last_frame.has_value()) {
+          cs.last_accepted_frame_index = *last_frame;
+        }
+        output_interface->publish_control_status(cs);
+      }
+    }
+
+    /**
      * @brief Advance the playback cursor and blend planner output.
      *
      * Called at the end of each control tick.  Two cases:
@@ -3883,7 +4008,9 @@ class G1Deploy {
         case ProgramState::WAIT_FOR_CONTROL:
           if (!CheckSafety()) {
             std::cout << "[ERROR] Safety check failed, cannot start control." << std::endl;
+            playback_protocol_.fault();
             operator_state.stop = true;
+            PublishPlaybackFaultHeartbeat(operator_state);
             break;
           }
 
@@ -3908,7 +4035,9 @@ class G1Deploy {
         case ProgramState::CONTROL: {
           if (!CheckSafety()) {
             std::cout << "[ERROR] Safety check failed, stopping control." << std::endl;
+            playback_protocol_.fault();
             operator_state.stop = true;
+            PublishPlaybackFaultHeartbeat(operator_state);
             break;
           }
 
@@ -3919,7 +4048,9 @@ class G1Deploy {
 
           if (!GatherRobotStateToLogger()) {
             std::cout << "✗ Error: Failed to gather robot state to logger in the middle of the control loop!" << std::endl;
+            playback_protocol_.fault();
             operator_state.stop = true;
+            PublishPlaybackFaultHeartbeat(operator_state);
             std::cout << "Stopping control system." << std::endl;
             return;
           }
@@ -3966,8 +4097,13 @@ class G1Deploy {
           }
 
           if (!GatherInputInterfaceData()) {
+            playback_protocol_.fault();
+            operator_state.stop = true;
+            PublishPlaybackFaultHeartbeat(operator_state);
             return;
           }
+
+          ProcessPlaybackMarkers(operator_state);
 
           
           // Lock mutex for observation gathering and output sending to ensure consistency
@@ -3995,7 +4131,9 @@ class G1Deploy {
             if (!GatherObservations()) {
               std::cout << "✗ Error: Failed to gather observations in the middle of the control loop!" << std::endl;
               std::cout << "Stopping control system." << std::endl;
+              playback_protocol_.fault();
               operator_state.stop = true;
+              PublishPlaybackFaultHeartbeat(operator_state);
               return;
             }
           } // Release lock after all observation-dependent operations
@@ -4014,8 +4152,14 @@ class G1Deploy {
           if (!CreatePolicyCommand()) {
             std::cout << "✗ Error: Failed to create policy command in the middle of the control loop!" << std::endl;
             std::cout << "Stopping control system." << std::endl;
+            playback_protocol_.fault();
             operator_state.stop = true;
+            PublishPlaybackFaultHeartbeat(operator_state);
             return;
+          }
+          if (!ApplyPlaybackProtocol(operator_state)) {
+            std::cout << "✗ Playback protocol entered FAULT; stopping control system." << std::endl;
+            operator_state.stop = true;
           }
           auto motor_command_end_time = std::chrono::steady_clock::now();
 
@@ -4050,6 +4194,8 @@ class G1Deploy {
               cs.instance_id = deploy_instance_id_;
               cs.control_started = operator_state.start;
               cs.control_stopped = operator_state.stop;
+              cs.playback_phase = playback_protocol_.phase_name();
+              cs.playback_id = playback_protocol_.active_playback_id();
               cs.input_type = input_type_;
               if (auto* zm = dynamic_cast<ZMQManager*>(input_interface_.get())) {
                 cs.manager_mode = (zm->GetActiveMode() == ZMQManager::ManagedMode::STREAMED_MOTION)
@@ -4131,7 +4277,9 @@ class G1Deploy {
           if (!CurrentFrameAdvancement()) {
             std::cout << "✗ Error: Failed to advance current frame in the middle of the control loop!" << std::endl;
             std::cout << "Stopping control system." << std::endl;
+            playback_protocol_.fault();
             operator_state.stop = true;
+            PublishPlaybackFaultHeartbeat(operator_state);
             return;
           }
 

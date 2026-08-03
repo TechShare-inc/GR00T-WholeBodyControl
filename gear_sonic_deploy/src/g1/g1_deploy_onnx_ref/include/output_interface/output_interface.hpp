@@ -123,6 +123,9 @@ public:
       bool stream_enabled = false;       // ZMQEndpointInterface::use_zmq_stream
       double last_pose_age_s = -1.0;     // seconds since last ZMQ pose was received
       int64_t last_accepted_frame_index = -1;
+      std::string playback_phase = "STABLE_STANDING";
+      int64_t playback_id = 0;
+      uint64_t heartbeat_sequence = 0;
     };
 
     /**

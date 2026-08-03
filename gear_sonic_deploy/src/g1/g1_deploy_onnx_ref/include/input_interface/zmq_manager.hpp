@@ -279,6 +279,16 @@ class ZMQManager : public InputInterface {
             }
           }
 
+          // Preserve controller-owned playback markers for the control loop.
+          if (latest_command_.playback_start && latest_command_.playback_id > 0) {
+            pending_playback_start_ = latest_command_.playback_id;
+          }
+          if (latest_command_.normal_completion && latest_command_.playback_id > 0 &&
+              latest_command_.terminal_frame_index >= 0) {
+            pending_normal_completion_ = NormalCompletionMarker{
+                latest_command_.playback_id, latest_command_.terminal_frame_index};
+          }
+
           // Clear valid flag - next callback will start fresh accumulation
           active_mode_ = new_mode;
           latest_command_.valid = false;
@@ -449,6 +459,37 @@ class ZMQManager : public InputInterface {
         return pose_interface_->GetLastAcceptedFrameIndex();
       }
       return {};
+    }
+
+    struct NormalCompletionMarker {
+      int64_t playback_id = 0;
+      int64_t terminal_frame_index = -1;
+    };
+
+    /// Consume a playback-start marker after the command subscriber has latched it.
+    std::optional<int64_t> ConsumePlaybackStart() {
+      std::lock_guard<std::mutex> lock(command_mutex_);
+      if (!pending_playback_start_.has_value()) {
+        return {};
+      }
+      auto marker = pending_playback_start_;
+      pending_playback_start_.reset();
+      return marker;
+    }
+
+    /// Consume normal completion only after the streamed terminal frame was accepted.
+    std::optional<NormalCompletionMarker> ConsumeNormalCompletionIfReady() {
+      std::lock_guard<std::mutex> lock(command_mutex_);
+      if (!pending_normal_completion_.has_value()) {
+        return {};
+      }
+      const auto accepted = GetLastAcceptedFrameIndex();
+      if (!accepted.has_value() || *accepted < pending_normal_completion_->terminal_frame_index) {
+        return {};
+      }
+      auto marker = pending_normal_completion_;
+      pending_normal_completion_.reset();
+      return marker;
     }
 
     /// @return The current managed mode (PLANNER or STREAMED_MOTION).
@@ -693,10 +734,16 @@ class ZMQManager : public InputInterface {
       if (hdr.fields.empty() || bufs.empty()) return;
       
       int start_idx = -1, stop_idx = -1, planner_idx = -1;
+      int playback_start_idx = -1, normal_completion_idx = -1;
+      int playback_id_idx = -1, terminal_frame_index_idx = -1;
       for (size_t i = 0; i < hdr.fields.size(); ++i) {
         if (hdr.fields[i].name == "start") start_idx = static_cast<int>(i);
         else if (hdr.fields[i].name == "stop") stop_idx = static_cast<int>(i);
         else if (hdr.fields[i].name == "planner") planner_idx = static_cast<int>(i);
+        else if (hdr.fields[i].name == "playback_start") playback_start_idx = static_cast<int>(i);
+        else if (hdr.fields[i].name == "normal_completion") normal_completion_idx = static_cast<int>(i);
+        else if (hdr.fields[i].name == "playback_id") playback_id_idx = static_cast<int>(i);
+        else if (hdr.fields[i].name == "terminal_frame_index") terminal_frame_index_idx = static_cast<int>(i);
       }
       
       if (start_idx < 0 || stop_idx < 0 || planner_idx < 0) {
@@ -763,6 +810,22 @@ class ZMQManager : public InputInterface {
         }
       }
       
+      auto decode_u8 = [&](int index, bool& value) {
+        if (index < 0 || bufs[index].size < sizeof(uint8_t)) return;
+        uint8_t raw = 0;
+        std::memcpy(&raw, bufs[index].data, sizeof(raw));
+        value = raw != 0;
+      };
+      auto decode_i64 = [&](int index, int64_t& value) {
+        if (index < 0 || bufs[index].size < sizeof(int64_t)) return;
+        std::memcpy(&value, bufs[index].data, sizeof(value));
+        if (needs_swap) value = byte_swap(value);
+      };
+      decode_u8(playback_start_idx, cmd.playback_start);
+      decode_u8(normal_completion_idx, cmd.normal_completion);
+      decode_i64(playback_id_idx, cmd.playback_id);
+      decode_i64(terminal_frame_index_idx, cmd.terminal_frame_index);
+
       // Update buffer with OR logic to accumulate start/stop signals
       std::lock_guard<std::mutex> lock(command_mutex_);
       
@@ -770,12 +833,24 @@ class ZMQManager : public InputInterface {
       if (!latest_command_.valid) {
         latest_command_.start = false;
         latest_command_.stop = false;
+        latest_command_.playback_start = false;
+        latest_command_.normal_completion = false;
+        latest_command_.playback_id = 0;
+        latest_command_.terminal_frame_index = -1;
       }
       
       // Accumulate start/stop with OR logic
       latest_command_.start = latest_command_.start || cmd.start;
       latest_command_.stop = latest_command_.stop || cmd.stop;
       latest_command_.planner = cmd.planner;  // Overwrite (mode should be latest)
+      latest_command_.playback_start = latest_command_.playback_start || cmd.playback_start;
+      latest_command_.normal_completion = latest_command_.normal_completion || cmd.normal_completion;
+      if (cmd.playback_id > 0) {
+        latest_command_.playback_id = cmd.playback_id;
+      }
+      if (cmd.terminal_frame_index >= 0) {
+        latest_command_.terminal_frame_index = cmd.terminal_frame_index;
+      }
       latest_command_.valid = true;
       
       if constexpr (DEBUG_LOGGING) {
@@ -1247,8 +1322,10 @@ class ZMQManager : public InputInterface {
     // ------------------------------------------------------------------
     ManagedMode active_mode_;           ///< Current operational mode (PLANNER or STREAMED_MOTION).
     
-    std::mutex command_mutex_;          ///< Guards access to latest_command_.
+    std::mutex command_mutex_;          ///< Guards access to latest_command_ and pending markers.
     CommandMessage latest_command_;     ///< Most recent (or accumulated) command message.
+    std::optional<int64_t> pending_playback_start_;
+    std::optional<NormalCompletionMarker> pending_normal_completion_;
     
     std::mutex planner_mutex_;          ///< Guards access to latest_planner_message_.
     PlannerMessage latest_planner_message_;  ///< Most recent planner movement message.
