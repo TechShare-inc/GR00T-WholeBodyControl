@@ -530,8 +530,9 @@ class DefaultEnv:
         # not a new clock epoch. Keeping time monotonic prevents downstream
         # controllers from observing a discontinuous timestamp.
         self.mj_data.time = simulation_time
-        if self.config.get("ENABLE_ELASTIC_BAND", False) and self.elastic_band is not None:
-            self.elastic_band.enable = True
+        # Preserve the operator-selected elastic-band state. In particular, a
+        # fall after key 9 released support must not silently hang the robot
+        # from the band again.
         mujoco.mj_forward(self.mj_model, self.mj_data)
 
 

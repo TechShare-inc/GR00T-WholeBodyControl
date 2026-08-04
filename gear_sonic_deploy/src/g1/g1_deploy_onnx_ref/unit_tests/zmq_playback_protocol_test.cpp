@@ -238,6 +238,71 @@ TEST(ZMQPlaybackProtocolTest, LoopbackMarkersDriveControllerReturnToStandProtoco
       PlaybackPhase::FAULT);
 }
 
+TEST(ZMQPlaybackProtocolTest, StreamModeResetPreservesSettledIdleFrame) {
+  zmq::context_t context(1);
+  zmq::socket_t publisher(context, zmq::socket_type::pub);
+  publisher.bind("tcp://127.0.0.1:*");
+  const auto endpoint = publisher.get(zmq::sockopt::last_endpoint);
+  const auto port = std::stoi(endpoint.substr(endpoint.rfind(':') + 1));
+
+  ZMQManager manager("127.0.0.1", port);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  auto idle_motion = std::make_shared<MotionSequence>();
+  idle_motion->name = "planner_motion";
+  idle_motion->timesteps = 2;
+  idle_motion->ReserveCapacity(2, 29, 1, 1, 0, 0);
+  for (int joint = 0; joint < 29; ++joint) {
+    idle_motion->JointPositions(0)[joint] = -10.0 - joint;
+    idle_motion->JointPositions(1)[joint] = 10.0 + joint;
+  }
+
+  MotionDataReader motion_reader;
+  std::shared_ptr<const MotionSequence> current_motion = idle_motion;
+  int current_frame = 1;
+  OperatorState operator_state;
+  bool reinitialize_heading = false;
+  DataBuffer<HeadingState> heading_state_buffer;
+  PlannerState planner_state;
+  planner_state.enabled = true;
+  planner_state.initialized = true;
+  DataBuffer<MovementState> movement_state_buffer;
+  std::mutex current_motion_mutex;
+  bool report_temperature = false;
+
+  const auto command = BuildCommand(false, false);
+  for (int i = 0; i < 3; ++i) {
+    publisher.send(zmq::buffer(command), zmq::send_flags::none);
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  manager.update();
+  manager.handle_input(
+      motion_reader, current_motion, current_frame, operator_state,
+      reinitialize_heading, heading_state_buffer, true, planner_state,
+      movement_state_buffer, current_motion_mutex, report_temperature);
+
+  ASSERT_TRUE(current_motion);
+  ASSERT_EQ(current_frame, 1);
+  for (int joint = 0; joint < 29; ++joint) {
+    EXPECT_DOUBLE_EQ(current_motion->JointPositions(current_frame)[joint], 10.0 + joint);
+  }
+
+  auto streamed_motion = std::make_shared<MotionSequence>();
+  streamed_motion->name = "streamed";
+  streamed_motion->timesteps = 1;
+  streamed_motion->ReserveCapacity(1, 29, 1, 1, 0, 0);
+  current_motion = streamed_motion;
+  current_frame = 0;
+  ASSERT_TRUE(manager.ReturnToReferenceMotion(
+      current_motion, current_frame, operator_state, reinitialize_heading,
+      current_motion_mutex));
+  ASSERT_EQ(current_frame, 1);
+  for (int joint = 0; joint < 29; ++joint) {
+    EXPECT_DOUBLE_EQ(current_motion->JointPositions(current_frame)[joint], 10.0 + joint);
+  }
+}
+
 TEST(ZMQPlaybackProtocolTest, RejectedPlaybackStartDoesNotAdmitPoseFrames) {
   zmq::context_t context(1);
   zmq::socket_t publisher(context, zmq::socket_type::pub);

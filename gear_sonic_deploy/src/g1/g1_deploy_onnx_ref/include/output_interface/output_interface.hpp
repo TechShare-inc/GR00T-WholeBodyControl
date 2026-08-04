@@ -128,6 +128,25 @@ public:
       std::string playback_phase = "STABLE_STANDING";
       int64_t playback_id = 0;
       uint64_t heartbeat_sequence = 0;
+      bool standing_active = false;
+      double standing_elapsed_s = -1.0;
+      double standing_max_joint_velocity = -1.0;
+      double standing_velocity_tolerance = -1.0;
+      bool standing_velocity_ok = false;
+      double standing_max_recovery_displacement = -1.0;
+      double standing_recovery_displacement_limit = -1.0;
+      bool standing_recovery_ok = false;
+      bool standing_position_reference_available = false;
+      double standing_max_position_drift = -1.0;
+      double standing_position_tolerance = -1.0;
+      bool standing_position_ok = false;
+      double standing_hold_elapsed_s = 0.0;
+      double standing_hold_required_s = -1.0;
+      bool standing_body_ok = false;
+      double standing_torso_tilt_rad = -1.0;
+      double standing_torso_tilt_limit_rad = -1.0;
+      double standing_max_torso_angular_velocity = -1.0;
+      double standing_torso_angular_velocity_limit = -1.0;
     };
 
     /**

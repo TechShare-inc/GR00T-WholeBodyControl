@@ -214,7 +214,7 @@ public:
 
         msgpack::sbuffer sbuf;
         msgpack::packer<msgpack::sbuffer> pk(&sbuf);
-        pk.pack_map(13);
+        pk.pack_map(32);
         pk.pack("instance_id");     pk.pack(status.instance_id);
         pk.pack("control_started"); pk.pack(status.control_started);
         pk.pack("control_stopped"); pk.pack(status.control_stopped);
@@ -228,6 +228,30 @@ public:
         pk.pack("playback_phase");     pk.pack(status.playback_phase);
         pk.pack("playback_id");        pk.pack(status.playback_id);
         pk.pack("heartbeat_sequence"); pk.pack(++control_status_sequence_);
+        pk.pack("standing_active"); pk.pack(status.standing_active);
+        pk.pack("standing_elapsed_s"); pk.pack(status.standing_elapsed_s);
+        pk.pack("standing_max_joint_velocity"); pk.pack(status.standing_max_joint_velocity);
+        pk.pack("standing_velocity_tolerance"); pk.pack(status.standing_velocity_tolerance);
+        pk.pack("standing_velocity_ok"); pk.pack(status.standing_velocity_ok);
+        pk.pack("standing_max_recovery_displacement");
+        pk.pack(status.standing_max_recovery_displacement);
+        pk.pack("standing_recovery_displacement_limit");
+        pk.pack(status.standing_recovery_displacement_limit);
+        pk.pack("standing_recovery_ok"); pk.pack(status.standing_recovery_ok);
+        pk.pack("standing_position_reference_available");
+        pk.pack(status.standing_position_reference_available);
+        pk.pack("standing_max_position_drift"); pk.pack(status.standing_max_position_drift);
+        pk.pack("standing_position_tolerance"); pk.pack(status.standing_position_tolerance);
+        pk.pack("standing_position_ok"); pk.pack(status.standing_position_ok);
+        pk.pack("standing_hold_elapsed_s"); pk.pack(status.standing_hold_elapsed_s);
+        pk.pack("standing_hold_required_s"); pk.pack(status.standing_hold_required_s);
+        pk.pack("standing_body_ok"); pk.pack(status.standing_body_ok);
+        pk.pack("standing_torso_tilt_rad"); pk.pack(status.standing_torso_tilt_rad);
+        pk.pack("standing_torso_tilt_limit_rad"); pk.pack(status.standing_torso_tilt_limit_rad);
+        pk.pack("standing_max_torso_angular_velocity");
+        pk.pack(status.standing_max_torso_angular_velocity);
+        pk.pack("standing_torso_angular_velocity_limit");
+        pk.pack(status.standing_torso_angular_velocity_limit);
         send_zmq_message(control_status_topic_, sbuf);
     }
 
