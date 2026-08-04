@@ -32,6 +32,7 @@
  *   1       | joint_pos, joint_vel             | smpl_joints, smpl_pose
  *   2       | smpl_joints, smpl_pose           | joint_pos, joint_vel
  *   3       | joint_pos, joint_vel, smpl_joints, smpl_pose | —
+ *   4       | joint_pos, joint_vel, smpl_joints, smpl_pose | playback correlation
  *
  * ## Optional Fields (all versions)
  *
@@ -399,15 +400,10 @@ public:
                     // Decode into a new MotionSequence with current playback position
                     auto result = DecodeIntoMotionSequence(current_frame, streamed_motion_, stream_window_start_, heading_state_buffer);
                     
-                    // Handle Protocol v4 (token-only) - no motion, just tokens
-                    if (result.protocol_version == 4) {
-                        if (result.motion) {
-                            DisableZmqAndReset(motion_reader, current_motion, current_frame,
-                                               operator_state, reinitialize_heading, current_motion_mutex,
-                                               "Protocol version 4 with motion data is impossible!");
-                            return;
-                        }
-
+                    // Handle Protocol v4 token-only input.  Protocol v4 also
+                    // carries correlated joint+SMPL motion frames; those
+                    // results continue through the normal motion path below.
+                    if (result.protocol_version == 4 && !result.motion) {
                         if (result.token_data.empty()) {
                             DisableZmqAndReset(motion_reader, current_motion, current_frame,
                                                operator_state, reinitialize_heading, current_motion_mutex,
@@ -591,7 +587,12 @@ public:
 
     std::optional<std::chrono::steady_clock::time_point> GetLastUpdateTime() const override {
       if (is_localhost_) {
-        return data_timestamp_;
+        // Local publishers may omit the optional sender monotonic timestamp.
+        // In that case, the receive timestamp still provides truthful
+        // freshness telemetry instead of reporting an unexplained -1 age.
+        if (data_timestamp_.has_value()) {
+          return data_timestamp_;
+        }
       }
       return last_receive_time_;
     }
@@ -622,6 +623,12 @@ public:
 
     void SetPlaybackFrameAdmission(int64_t playback_id, bool admitted) {
         SetPlaybackFrameAdmission(1, playback_id, admitted);
+    }
+
+    bool IsPlaybackFrameAdmitted(int64_t controller_epoch, int64_t playback_id) const {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        return admitted_controller_epoch_ == controller_epoch &&
+            admitted_playback_id_ == playback_id && playback_id > 0;
     }
 
     /**
@@ -687,7 +694,7 @@ private:
         int frame_offset_adjustment = 0;          ///< Subtract from current_frame for window shift.
         bool did_catchup_reset = false;            ///< True → caller should reset playback to frame 0.
         int frame_step = 1;                        ///< Detected stride between frame indices.
-        int protocol_version = 0;                  ///< Protocol version from the message (1, 2, or 3).
+        int protocol_version = 0;                  ///< Protocol version from the message (1, 2, 3, or 4).
         std::vector<double> token_data;            ///< Token data from the message.
     };
     
@@ -1553,13 +1560,15 @@ private:
                 }
             }
             
-            // Print frame indices for protocol v3 (SMPL actions)
+            // Print frame indices for SMPL motion actions.
             if ((protocol_version == 3 || protocol_version == 4) && !frame_indices.empty()) {
                 if (frame_indices.size() == 1) {
-                    std::cout << "[ZMQEndpointInterface] Protocol v3: Received SMPL action (single) - frame_index: " 
+                    std::cout << "[ZMQEndpointInterface] Protocol v" << protocol_version
+                              << ": Received SMPL action (single) - frame_index: "
                               << frame_indices[0] << std::endl;
                 } else {
-                    std::cout << "[ZMQEndpointInterface] Protocol v3: Received SMPL action (chunk) - frames: " 
+                    std::cout << "[ZMQEndpointInterface] Protocol v" << protocol_version
+                              << ": Received SMPL action (chunk) - frames: "
                               << frame_indices[0] << " to " << frame_indices.back() 
                               << ", chunk_size: " << frame_indices.size() << std::endl;
                 }

@@ -214,13 +214,14 @@ public:
 
         msgpack::sbuffer sbuf;
         msgpack::packer<msgpack::sbuffer> pk(&sbuf);
-        pk.pack_map(41);
+        pk.pack_map(45);
         pk.pack("instance_id");     pk.pack(status.instance_id);
         pk.pack("control_started"); pk.pack(status.control_started);
         pk.pack("control_stopped"); pk.pack(status.control_stopped);
         pk.pack("input_type");      pk.pack(status.input_type);
         pk.pack("manager_mode");    pk.pack(status.manager_mode);
         pk.pack("stream_enabled");  pk.pack(status.stream_enabled);
+        pk.pack("playback_frame_admitted"); pk.pack(status.playback_frame_admitted);
         pk.pack("last_pose_age_s"); pk.pack(status.last_pose_age_s);
         pk.pack("low_state_age_s"); pk.pack(status.low_state_age_s);
         pk.pack("imu_age_s");       pk.pack(status.imu_age_s);
@@ -254,6 +255,11 @@ public:
         pk.pack("standing_position_ok"); pk.pack(status.standing_position_ok);
         pk.pack("standing_hold_elapsed_s"); pk.pack(status.standing_hold_elapsed_s);
         pk.pack("standing_hold_required_s"); pk.pack(status.standing_hold_required_s);
+        pk.pack("standing_violation_hold_elapsed_s");
+        pk.pack(status.standing_violation_hold_elapsed_s);
+        pk.pack("standing_violation_hold_required_s");
+        pk.pack(status.standing_violation_hold_required_s);
+        pk.pack("standing_violation_pending"); pk.pack(status.standing_violation_pending);
         pk.pack("standing_body_ok"); pk.pack(status.standing_body_ok);
         pk.pack("standing_torso_tilt_rad"); pk.pack(status.standing_torso_tilt_rad);
         pk.pack("standing_torso_tilt_limit_rad"); pk.pack(status.standing_torso_tilt_limit_rad);

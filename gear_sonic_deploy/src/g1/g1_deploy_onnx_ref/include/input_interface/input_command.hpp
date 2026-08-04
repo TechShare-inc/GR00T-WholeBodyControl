@@ -168,6 +168,9 @@ class PlaybackProtocol {
     bool position_ok = false;
     double stable_hold_elapsed_s = 0.0;
     double stable_hold_required_s = -1.0;
+    double violation_hold_elapsed_s = 0.0;
+    double violation_hold_required_s = -1.0;
+    bool violation_pending = false;
     bool low_state_fresh = false;
     bool imu_fresh = false;
     bool evaluated = false;
@@ -184,12 +187,14 @@ class PlaybackProtocol {
       double velocity_tolerance = 0.10,
       double stable_hold_s = 0.25,
       double max_recovery_displacement = 1.0,
-      double return_timeout_s = 10.0)
+      double return_timeout_s = 10.0,
+      double violation_hold_s = 0.1)
       : return_duration_s_(std::max(0.001, return_duration_s)),
         position_tolerance_(std::max(0.0, position_tolerance)),
         velocity_tolerance_(std::max(0.0, velocity_tolerance)),
         stable_hold_s_(std::max(0.0, stable_hold_s)),
         max_recovery_displacement_(std::max(0.0, max_recovery_displacement)),
+        violation_hold_s_(std::max(0.0, violation_hold_s)),
         return_timeout_s_(std::max(
             return_duration_s_ + stable_hold_s_, return_timeout_s)) {}
 
@@ -218,6 +223,7 @@ class PlaybackProtocol {
     phase_ = PlaybackPhase::ACTION;
     stable_since_.reset();
     settled_reference_position_.reset();
+    violation_since_.reset();
     qualification_reference_pending_ = false;
     initial_qualification_active_ = false;
     last_action_outcome_ = ActionOutcome::NONE;
@@ -229,6 +235,7 @@ class PlaybackProtocol {
     return_started_at_ = now;
     stable_since_.reset();
     settled_reference_position_.reset();
+    violation_since_.reset();
     qualification_reference_pending_ = true;
     initial_qualification_active_ = true;
     phase_ = PlaybackPhase::RETURN_TO_STAND;
@@ -259,6 +266,7 @@ class PlaybackProtocol {
     return_started_at_ = now;
     stable_since_.reset();
     settled_reference_position_.reset();
+    violation_since_.reset();
     qualification_reference_pending_ = false;
     initial_qualification_active_ = false;
     phase_ = PlaybackPhase::RETURN_TO_STAND;
@@ -341,12 +349,31 @@ class PlaybackProtocol {
           measured_position, measured_velocity, low_state_fresh, imu_fresh,
           now, body_stable);
       result.standing.active = false;
-      const bool stable = low_state_fresh && imu_fresh && body_stable &&
-          result.standing.velocity_ok && result.standing.recovery_ok &&
+      result.standing.violation_hold_elapsed_s = 0.0;
+      result.standing.violation_hold_required_s = violation_hold_s_;
+      result.standing.violation_pending = false;
+      const bool hard_gates_ok = low_state_fresh && imu_fresh && body_stable;
+      const bool soft_gates_ok = result.standing.velocity_ok &&
+          result.standing.recovery_ok &&
           (!result.standing.position_reference_available || result.standing.position_ok);
-      if (!stable) {
+      if (!hard_gates_ok) {
+        violation_since_.reset();
         begin_standing_qualification(now);
         result.phase = phase_;
+      } else if (!soft_gates_ok) {
+        if (!violation_since_.has_value()) {
+          violation_since_ = now;
+        }
+        result.standing.violation_pending = true;
+        result.standing.violation_hold_required_s = violation_hold_s_;
+        result.standing.violation_hold_elapsed_s =
+            std::chrono::duration<double>(now - *violation_since_).count();
+        if (result.standing.violation_hold_elapsed_s >= violation_hold_s_) {
+          begin_standing_qualification(now);
+          result.phase = phase_;
+        }
+      } else {
+        violation_since_.reset();
       }
       return result;
     }
@@ -359,6 +386,7 @@ class PlaybackProtocol {
       result.standing.recovery_displacement_limit = max_recovery_displacement_;
       result.standing.position_tolerance = position_tolerance_;
       result.standing.stable_hold_required_s = stable_hold_s_;
+      result.standing.violation_hold_required_s = violation_hold_s_;
       result.standing.low_state_fresh = low_state_fresh;
       result.standing.imu_fresh = imu_fresh;
       result.standing.body_ok = body_stable;
@@ -375,6 +403,7 @@ class PlaybackProtocol {
       if (!low_state_fresh || !imu_fresh) {
         stable_since_.reset();
         settled_reference_position_.reset();
+        violation_since_.reset();
         qualification_reference_pending_ = true;
         result.phase = phase_;
         return result;
@@ -452,6 +481,7 @@ class PlaybackProtocol {
   void fault() {
     phase_ = PlaybackPhase::FAULT;
     stable_since_.reset();
+    violation_since_.reset();
     initial_qualification_active_ = false;
   }
 
@@ -478,6 +508,7 @@ class PlaybackProtocol {
     result.recovery_displacement_limit = max_recovery_displacement_;
     result.position_tolerance = position_tolerance_;
     result.stable_hold_required_s = stable_hold_s_;
+    result.violation_hold_required_s = violation_hold_s_;
     result.low_state_fresh = low_state_fresh;
     result.imu_fresh = imu_fresh;
     result.body_ok = body_stable;
@@ -505,6 +536,11 @@ class PlaybackProtocol {
       result.stable_hold_elapsed_s =
           std::chrono::duration<double>(now - *stable_since_).count();
     }
+    if (violation_since_.has_value()) {
+      result.violation_pending = true;
+      result.violation_hold_elapsed_s =
+          std::chrono::duration<double>(now - *violation_since_).count();
+    }
     return result;
   }
 
@@ -514,6 +550,7 @@ class PlaybackProtocol {
   double velocity_tolerance_;
   double stable_hold_s_;
   double max_recovery_displacement_;
+  double violation_hold_s_;
   double return_timeout_s_;
   int64_t active_playback_id_ = 0;
   int64_t controller_epoch_ = 1;
@@ -522,6 +559,7 @@ class PlaybackProtocol {
   Clock::time_point return_started_at_{};
   std::optional<Clock::time_point> stable_since_;
   std::optional<JointArray> settled_reference_position_;
+  std::optional<Clock::time_point> violation_since_;
   bool qualification_reference_pending_ = false;
   bool initial_qualification_active_ = false;
   bool standing_evaluated_ = false;

@@ -31,7 +31,9 @@
  * - **Protocol versions**: The merger itself is version-agnostic – it
  *   merges whatever data fields are present in IncomingData.  Protocol-
  *   version validation (rejecting changes mid-session, etc.) is left to
- *   the caller (e.g. ZMQEndpointInterface).
+ *   the caller (e.g. ZMQEndpointInterface).  Motion protocol v4 has the
+ *   same required joint + SMPL fields as v3; its additional lifecycle
+ *   correlation fields are consumed by the endpoint before the merger.
  *
  * ## Thread Safety
  *
@@ -76,7 +78,7 @@ public:
         int frame_offset_adjustment = 0;         ///< Subtract from current_frame to compensate for window shift.
         bool did_catchup_reset = false;           ///< True → caller should reset playback to frame 0.
         int frame_step = 1;                       ///< Detected stride between consecutive frame indices.
-        int protocol_version = 0;                 ///< Protocol version of the incoming data (1, 2, or 3).
+        int protocol_version = 0;                 ///< Protocol version of the incoming data (1, 2, 3, or 4).
     };
     
     /// All the data needed for one merge operation, decoded by the caller.
@@ -94,7 +96,7 @@ public:
         
         std::vector<int64_t> frame_indices;  ///< Monotonic global frame indices (required).
         
-        int protocol_version = 1;    ///< Protocol version (1, 2, or 3).
+        int protocol_version = 1;    ///< Protocol version (1, 2, 3, or 4).
         bool catch_up_enabled = true; ///< true → use MAX_GAP_FRAMES; false → allow infinite delay.
         
         // Derived dimensions (must match the vector sizes above)
@@ -220,14 +222,18 @@ private:
         }
         
         // Validate protocol-specific requirements
-        if (data.protocol_version == 3) {
-            // Version 3: requires both SMPL data AND joint data
+        if (data.protocol_version == 3 || data.protocol_version == 4) {
+            // Versions 3 and 4: require both SMPL data AND joint data.
+            // v4 adds playback correlation to the wire format but retains
+            // the same motion payload contract as v3.
             if (data.smpl_joints.empty() || data.smpl_pose.empty()) {
-                std::cerr << "[StreamedMotionMerger] Protocol v3 missing smpl_joints or smpl_pose" << std::endl;
+                std::cerr << "[StreamedMotionMerger] Protocol v" << data.protocol_version
+                          << " missing smpl_joints or smpl_pose" << std::endl;
                 return false;
             }
             if (data.joint_pos.empty() || data.joint_vel.empty()) {
-                std::cerr << "[StreamedMotionMerger] Protocol v3 missing joint_pos or joint_vel" << std::endl;
+                std::cerr << "[StreamedMotionMerger] Protocol v" << data.protocol_version
+                          << " missing joint_pos or joint_vel" << std::endl;
                 return false;
             }
         } else if (data.protocol_version == 2) {

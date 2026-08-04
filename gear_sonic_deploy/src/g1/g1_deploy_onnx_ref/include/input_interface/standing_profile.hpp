@@ -125,12 +125,13 @@ struct StandingProfile {
   double joint_velocity_tolerance_rad_s = 0.10;
   double recovery_displacement_limit_rad = 1.0;
   double stable_hold_s = 0.25;
+  double standing_violation_hold_s = 0.1;
   double torso_tilt_limit_rad = 0.70;
   double torso_angular_velocity_limit_rad_s = 0.35;
   double post_action_recovery_timeout_s = 10.0;
   double low_state_freshness_limit_s = 0.5;
   double imu_freshness_limit_s = 0.5;
-  std::string digest = "6aaf521f82596a864f541f375b45af2e59e016b6d60ae5811e3ed5d7888be115";
+  std::string digest = "f3e24e130eb8a9ade8f028b32034a24995dfe2c9b261d3ff6241464ba2668031";
 
   static StandingProfile Load(const std::string& path) {
     if (path.empty()) {
@@ -160,6 +161,7 @@ struct StandingProfile {
     profile.joint_velocity_tolerance_rad_s = number("joint_velocity_tolerance_rad_s");
     profile.recovery_displacement_limit_rad = number("recovery_displacement_limit_rad");
     profile.stable_hold_s = number("stable_hold_s");
+    profile.standing_violation_hold_s = number("standing_violation_hold_s");
     profile.torso_tilt_limit_rad = number("torso_tilt_limit_rad");
     profile.torso_angular_velocity_limit_rad_s = number("torso_angular_velocity_limit_rad_s");
     profile.post_action_recovery_timeout_s = number("post_action_recovery_timeout_s");

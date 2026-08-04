@@ -238,6 +238,66 @@ TEST(PlaybackProtocolTest, StableStandingLosesValidityWhenTelemetryTurnsStale) {
   EXPECT_EQ(protocol.phase(), PlaybackPhase::RETURN_TO_STAND);
 }
 
+TEST(PlaybackProtocolTest, ShortSoftGateViolationDoesNotDropStableStanding) {
+  const auto standing = MakeArray(0.0);
+  const auto quiet = MakeArray(0.0);
+  const auto transient_velocity = MakeArray(0.2);
+  PlaybackProtocol protocol(3.0, 0.05, 0.1, 0.25, 1.0, 5.0, 0.1);
+  const auto t0 = PlaybackProtocol::Clock::time_point{};
+
+  ASSERT_TRUE(protocol.start_action(17, standing));
+  ASSERT_TRUE(protocol.request_return_to_stand(17, 10, 10, t0));
+  ASSERT_EQ(
+      protocol.update(standing, quiet, true, true,
+                      t0 + std::chrono::seconds(3)).phase,
+      PlaybackPhase::RETURN_TO_STAND);
+  ASSERT_EQ(
+      protocol.update(standing, quiet, true, true,
+                      t0 + std::chrono::milliseconds(3250)).phase,
+      PlaybackPhase::STABLE_STANDING);
+
+  const auto transient = protocol.update(
+      standing, transient_velocity, true, true,
+      t0 + std::chrono::milliseconds(3270));
+  EXPECT_EQ(transient.phase, PlaybackPhase::STABLE_STANDING);
+  EXPECT_FALSE(transient.standing.velocity_ok);
+  EXPECT_DOUBLE_EQ(transient.standing.violation_hold_elapsed_s, 0.0);
+
+  const auto recovered = protocol.update(
+      standing, quiet, true, true,
+      t0 + std::chrono::milliseconds(3290));
+  EXPECT_EQ(recovered.phase, PlaybackPhase::STABLE_STANDING);
+  EXPECT_TRUE(recovered.standing.velocity_ok);
+}
+
+TEST(PlaybackProtocolTest, PersistentSoftGateViolationRestartsQualification) {
+  const auto standing = MakeArray(0.0);
+  const auto quiet = MakeArray(0.0);
+  const auto moving = MakeArray(0.2);
+  PlaybackProtocol protocol(3.0, 0.05, 0.1, 0.25, 1.0, 5.0, 0.1);
+  const auto t0 = PlaybackProtocol::Clock::time_point{};
+
+  ASSERT_TRUE(protocol.start_action(17, standing));
+  ASSERT_TRUE(protocol.request_return_to_stand(17, 10, 10, t0));
+  ASSERT_EQ(
+      protocol.update(standing, quiet, true, true,
+                      t0 + std::chrono::seconds(3)).phase,
+      PlaybackPhase::RETURN_TO_STAND);
+  ASSERT_EQ(
+      protocol.update(standing, quiet, true, true,
+                      t0 + std::chrono::milliseconds(3250)).phase,
+      PlaybackPhase::STABLE_STANDING);
+
+  EXPECT_EQ(
+      protocol.update(standing, moving, true, true,
+                      t0 + std::chrono::milliseconds(3270)).phase,
+      PlaybackPhase::STABLE_STANDING);
+  EXPECT_EQ(
+      protocol.update(standing, moving, true, true,
+                      t0 + std::chrono::milliseconds(3380)).phase,
+      PlaybackPhase::RETURN_TO_STAND);
+}
+
 TEST(PlaybackProtocolTest, RejectsFramesFromAnOlderControllerEpoch) {
   const auto standing = MakeArray(1.0);
   PlaybackProtocol protocol;
