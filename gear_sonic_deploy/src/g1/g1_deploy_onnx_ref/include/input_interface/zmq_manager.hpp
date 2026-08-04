@@ -522,6 +522,11 @@ class ZMQManager : public InputInterface {
       SetPlaybackFrameAdmission(1, playback_id, admitted);
     }
 
+    bool IsPlaybackFrameAdmitted(int64_t controller_epoch, int64_t playback_id) const {
+      return pose_interface_ &&
+          pose_interface_->IsPlaybackFrameAdmitted(controller_epoch, playback_id);
+    }
+
     /// Consume normal completion only after the streamed terminal frame was accepted.
     std::optional<ActionEndMarker> ConsumeNormalCompletionIfReady() {
       std::lock_guard<std::mutex> lock(command_mutex_);

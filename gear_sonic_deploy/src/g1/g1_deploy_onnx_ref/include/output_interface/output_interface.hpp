@@ -121,6 +121,7 @@ public:
       std::string input_type;            // "zmq_manager", "manager", etc.
       std::string manager_mode;          // "planner" or "streamed_motion"
       bool stream_enabled = false;       // ZMQEndpointInterface::use_zmq_stream
+      bool playback_frame_admitted = false; // Matching v4 pose lane is open
       double last_pose_age_s = -1.0;     // seconds since last ZMQ pose was received
       double low_state_age_s = -1.0;     // seconds since the latest LowState sample
       double imu_age_s = -1.0;           // seconds since the latest torso IMU sample
@@ -151,6 +152,9 @@ public:
       bool standing_position_ok = false;
       double standing_hold_elapsed_s = 0.0;
       double standing_hold_required_s = -1.0;
+      double standing_violation_hold_elapsed_s = 0.0;
+      double standing_violation_hold_required_s = -1.0;
+      bool standing_violation_pending = false;
       bool standing_body_ok = false;
       double standing_torso_tilt_rad = -1.0;
       double standing_torso_tilt_limit_rad = -1.0;

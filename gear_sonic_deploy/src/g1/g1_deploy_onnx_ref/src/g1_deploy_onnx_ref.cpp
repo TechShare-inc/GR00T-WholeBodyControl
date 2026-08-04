@@ -2235,7 +2235,8 @@ class G1Deploy {
             standing_profile_.joint_velocity_tolerance_rad_s,
             standing_profile_.stable_hold_s,
             standing_profile_.recovery_displacement_limit_rad,
-            standing_profile_.post_action_recovery_timeout_s),
+            standing_profile_.post_action_recovery_timeout_s,
+            standing_profile_.standing_violation_hold_s),
         counter_(0),
         mode_pr_(Mode::PR),
         mode_machine_(0),
@@ -3380,6 +3381,11 @@ class G1Deploy {
       status.standing_position_ok = standing_diagnostics_.position_ok;
       status.standing_hold_elapsed_s = standing_diagnostics_.stable_hold_elapsed_s;
       status.standing_hold_required_s = standing_diagnostics_.stable_hold_required_s;
+      status.standing_violation_hold_elapsed_s =
+          standing_diagnostics_.violation_hold_elapsed_s;
+      status.standing_violation_hold_required_s =
+          standing_diagnostics_.violation_hold_required_s;
+      status.standing_violation_pending = standing_diagnostics_.violation_pending;
       status.standing_body_ok = standing_diagnostics_.body_ok;
       status.standing_torso_tilt_rad = standing_body_diagnostics_.tilt_rad;
       status.standing_torso_tilt_limit_rad = standing_body_diagnostics_.tilt_limit_rad;
@@ -3421,6 +3427,8 @@ class G1Deploy {
           cs.manager_mode = (zm->GetActiveMode() == ZMQManager::ManagedMode::STREAMED_MOTION)
                                 ? "streamed_motion" : "planner";
           cs.stream_enabled = zm->IsStreamEnabled();
+          cs.playback_frame_admitted = zm->IsPlaybackFrameAdmitted(
+              cs.controller_epoch, cs.playback_id);
         } else {
           cs.manager_mode = "unknown";
           cs.stream_enabled = false;
@@ -4342,6 +4350,8 @@ class G1Deploy {
                 cs.manager_mode = (zm->GetActiveMode() == ZMQManager::ManagedMode::STREAMED_MOTION)
                                       ? "streamed_motion" : "planner";
                 cs.stream_enabled = zm->IsStreamEnabled();
+                cs.playback_frame_admitted = zm->IsPlaybackFrameAdmitted(
+                    cs.controller_epoch, cs.playback_id);
               } else {
                 cs.manager_mode = "unknown";
                 cs.stream_enabled = false;

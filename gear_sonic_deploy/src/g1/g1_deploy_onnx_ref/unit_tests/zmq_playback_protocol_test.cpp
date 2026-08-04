@@ -94,6 +94,53 @@ std::vector<uint8_t> BuildPose(int64_t frame_index) {
   return message;
 }
 
+std::vector<uint8_t> BuildCorrelatedV4Pose(
+    int64_t frame_index, int64_t controller_epoch = 1, int64_t playback_id = 17) {
+  nlohmann::json header = {
+      {"v", 4},
+      {"endian", "le"},
+      {"count", 1},
+      {"fields", nlohmann::json::array({
+          {{"name", "frame_index"}, {"dtype", "i64"}, {"shape", {1}}},
+          {{"name", "controller_epoch"}, {"dtype", "i64"}, {"shape", {1}}},
+          {{"name", "playback_id"}, {"dtype", "i64"}, {"shape", {1}}},
+          {{"name", "body_quat"}, {"dtype", "f64"}, {"shape", {1, 4}}},
+          {{"name", "joint_pos"}, {"dtype", "f64"}, {"shape", {1, 29}}},
+          {{"name", "joint_vel"}, {"dtype", "f64"}, {"shape", {1, 29}}},
+          {{"name", "smpl_joints"}, {"dtype", "f64"}, {"shape", {1, 24, 3}}},
+          {{"name", "smpl_pose"}, {"dtype", "f64"}, {"shape", {1, 21, 3}}},
+      })},
+  };
+  const auto header_text = header.dump();
+  std::vector<uint8_t> message;
+  message.insert(message.end(), {'p', 'o', 's', 'e'});
+  message.insert(message.end(), header_text.begin(), header_text.end());
+  message.resize(message.size() + kHeaderSize - header_text.size(), 0);
+
+  const auto append_bytes = [&message](const void* data, size_t size) {
+    const auto offset = message.size();
+    message.resize(offset + size);
+    std::memcpy(message.data() + offset, data, size);
+  };
+  const auto append_i64 = [&append_bytes](int64_t value) {
+    append_bytes(&value, sizeof(value));
+  };
+  const std::array<double, 4> body_quaternion = {1.0, 0.0, 0.0, 0.0};
+  const std::array<double, 29> joint_position{};
+  const std::array<double, 29> joint_velocity{};
+  const std::array<double, 24 * 3> smpl_joints{};
+  const std::array<double, 21 * 3> smpl_pose{};
+  append_i64(frame_index);
+  append_i64(controller_epoch);
+  append_i64(playback_id);
+  append_bytes(body_quaternion.data(), sizeof(body_quaternion));
+  append_bytes(joint_position.data(), sizeof(joint_position));
+  append_bytes(joint_velocity.data(), sizeof(joint_velocity));
+  append_bytes(smpl_joints.data(), sizeof(smpl_joints));
+  append_bytes(smpl_pose.data(), sizeof(smpl_pose));
+  return message;
+}
+
 }  // namespace
 
 TEST(ZMQPlaybackProtocolTest, DecodesTaggedMarkersAndDefersStaleCompletion) {
@@ -238,6 +285,61 @@ TEST(ZMQPlaybackProtocolTest, LoopbackMarkersDriveControllerReturnToStandProtoco
       protocol.update(
           defaults, velocities, true, false, t0 + std::chrono::milliseconds(1300)).phase,
       PlaybackPhase::RETURN_TO_STAND);
+}
+
+TEST(ZMQPlaybackProtocolTest, AcceptsCorrelatedProtocolV4Motion) {
+  zmq::context_t context(1);
+  zmq::socket_t publisher(context, zmq::socket_type::pub);
+  publisher.bind("tcp://127.0.0.1:*");
+  const auto endpoint = publisher.get(zmq::sockopt::last_endpoint);
+  const auto port = std::stoi(endpoint.substr(endpoint.rfind(':') + 1));
+
+  ZMQManager manager("127.0.0.1", port);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  const auto send = [&publisher](const std::vector<uint8_t>& message) {
+    for (int i = 0; i < 3; ++i) {
+      publisher.send(zmq::buffer(message), zmq::send_flags::none);
+      std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    }
+  };
+
+  MotionDataReader motion_reader;
+  std::shared_ptr<const MotionSequence> current_motion =
+      std::make_shared<MotionSequence>();
+  int current_frame = 0;
+  OperatorState operator_state;
+  bool reinitialize_heading = false;
+  DataBuffer<HeadingState> heading_state_buffer;
+  PlannerState planner_state;
+  DataBuffer<MovementState> movement_state_buffer;
+  std::mutex current_motion_mutex;
+  bool report_temperature = false;
+
+  send(BuildCommand(true, false));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  manager.update();
+  const auto playback_start = manager.ConsumePlaybackStart();
+  ASSERT_TRUE(playback_start.has_value());
+  manager.SetPlaybackFrameAdmission(
+      playback_start->controller_epoch, playback_start->playback_id, true);
+  manager.handle_input(
+      motion_reader, current_motion, current_frame, operator_state,
+      reinitialize_heading, heading_state_buffer, true, planner_state,
+      movement_state_buffer, current_motion_mutex, report_temperature);
+
+  send(BuildCorrelatedV4Pose(
+      42, playback_start->controller_epoch, playback_start->playback_id));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  manager.update();
+  manager.handle_input(
+      motion_reader, current_motion, current_frame, operator_state,
+      reinitialize_heading, heading_state_buffer, true, planner_state,
+      movement_state_buffer, current_motion_mutex, report_temperature);
+
+  const auto accepted = manager.GetLastAcceptedFrameIndex();
+  ASSERT_TRUE(accepted.has_value());
+  EXPECT_EQ(*accepted, 42);
+  EXPECT_TRUE(manager.GetLastUpdateTime().has_value());
 }
 
 TEST(ZMQPlaybackProtocolTest, StreamModeResetPreservesSettledIdleFrame) {
