@@ -214,7 +214,7 @@ public:
 
         msgpack::sbuffer sbuf;
         msgpack::packer<msgpack::sbuffer> pk(&sbuf);
-        pk.pack_map(45);
+        pk.pack_map(46);
         pk.pack("instance_id");     pk.pack(status.instance_id);
         pk.pack("control_started"); pk.pack(status.control_started);
         pk.pack("control_stopped"); pk.pack(status.control_stopped);
@@ -235,6 +235,7 @@ public:
         pk.pack("standing_state");     pk.pack(status.standing_state);
         pk.pack("health_state");       pk.pack(status.health_state);
         pk.pack("last_action_outcome"); pk.pack(status.last_action_outcome);
+        pk.pack("simulation_reset_stage"); pk.pack(status.simulation_reset_stage);
         pk.pack("standing_profile_digest"); pk.pack(status.standing_profile_digest);
         pk.pack("standing_evaluated"); pk.pack(status.standing_evaluated);
         pk.pack("heartbeat_sequence"); pk.pack(++control_status_sequence_);

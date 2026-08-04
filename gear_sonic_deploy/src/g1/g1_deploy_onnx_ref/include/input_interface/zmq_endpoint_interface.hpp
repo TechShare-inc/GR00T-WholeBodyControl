@@ -180,6 +180,9 @@ public:
     
     // Flag to trigger safety reset in handle_input
     bool trigger_safety_reset = false;
+    // A simulator controller reset must restore the startup reference rather
+    // than preserve the current streamed action as the idle reference.
+    std::atomic<bool> controller_reset_to_start_{false};
 
     // Update is called each frame - read keyboard and check for network data
     void update() override {
@@ -293,14 +296,23 @@ public:
                 external_token_state_.SetData({});
                 operator_state.play = false;
                 reinitialize_heading = true;
-                auto temp_motion = std::make_shared<MotionSequence>(*current_motion);
-                temp_motion->name = "temporary_motion";
-                // Cache the planner-generated IDLE reference. SONIC uses this
-                // motion context to produce a closed-loop balancing command
-                // while no streamed action is active.
-                idle_reference_motion_ = temp_motion;
-                idle_reference_frame_ = std::clamp(
-                    current_frame, 0, std::max(0, idle_reference_motion_->timesteps - 1));
+                if (controller_reset_to_start_.exchange(false, std::memory_order_acq_rel)) {
+                    auto startup_motion = motion_reader.GetMotionShared(
+                        motion_reader.current_motion_index_);
+                    auto startup_reference = std::make_shared<MotionSequence>(*startup_motion);
+                    startup_reference->name = "startup_idle_reference";
+                    idle_reference_motion_ = startup_reference;
+                    idle_reference_frame_ = 0;
+                } else {
+                    auto temp_motion = std::make_shared<MotionSequence>(*current_motion);
+                    temp_motion->name = "temporary_motion";
+                    // Cache the planner-generated IDLE reference. SONIC uses this
+                    // motion context to produce a closed-loop balancing command
+                    // while no streamed action is active.
+                    idle_reference_motion_ = temp_motion;
+                    idle_reference_frame_ = std::clamp(
+                        current_frame, 0, std::max(0, idle_reference_motion_->timesteps - 1));
+                }
                 current_motion = idle_reference_motion_;
                 current_frame = idle_reference_frame_;
                 if (has_planner && planner_state.enabled) {
@@ -580,6 +592,12 @@ public:
     // Public method to trigger ZMQ mode toggle (for programmatic control from GamepadManager)
     void TriggerZMQToggle() {
         toggle_zmq_mode = true;
+    }
+
+    /// Request a full simulator reinitialization to the startup reference.
+    void RequestControllerReset() {
+        controller_reset_to_start_.store(true, std::memory_order_release);
+        TriggerSafetyReset();
     }
 
     /// @return True when ZMQ streamed-motion mode is active.
