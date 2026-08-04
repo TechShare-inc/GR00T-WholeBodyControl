@@ -182,6 +182,8 @@ class G1Deploy {
     double input_dt_;      ///< Input poll period    (100 Hz = 0.01 s).
     double duration_;      ///< Duration of the INIT ramp-up to default pose (3 s).
     PlaybackProtocol playback_protocol_; ///< Controller-owned playback lifecycle.
+    PlaybackProtocol::StandingDiagnostics standing_diagnostics_;
+    StandingBodyDiagnostics standing_body_diagnostics_;
     int counter_;          ///< General-purpose tick counter.
     Mode mode_pr_;         ///< Ankle control mode (series PR vs. parallel AB).
     uint8_t mode_machine_; ///< Robot variant code received from LowState.
@@ -3280,6 +3282,7 @@ class G1Deploy {
         return true;
       }
       if (playback_protocol_.phase() == PlaybackPhase::ACTION) {
+        standing_diagnostics_ = {};
         return true;
       }
 
@@ -3287,6 +3290,7 @@ class G1Deploy {
       // produced SONIC's balancing command from the cached IDLE reference.
       if (playback_protocol_.active_playback_id() <= 0 &&
           playback_protocol_.phase() == PlaybackPhase::STABLE_STANDING) {
+        standing_diagnostics_ = {};
         return true;
       }
 
@@ -3302,28 +3306,19 @@ class G1Deploy {
           used_imu_torso_data_.GetAgeMs() <= LOW_STATE_ABSENT_THRESHOLD.count();
 
       bool body_stable = false;
+      standing_body_diagnostics_ = {};
       if (used_imu_torso_data_.data) {
-        constexpr double kMaxTorsoTiltRad = 0.35;
-        constexpr double kMaxTorsoAngularVelocity = 0.35;
         const auto quaternion = used_imu_torso_data_.data->quaternion();
-        const double w = quaternion[0];
-        const double x = quaternion[1];
-        const double y = quaternion[2];
-        const double z = quaternion[3];
-        const double norm_squared = w * w + x * x + y * y + z * z;
-        if (norm_squared > 1e-12) {
-          const double upright_alignment =
-              1.0 - 2.0 * (x * x + y * y) / norm_squared;
-          const auto angular_velocity = used_imu_torso_data_.data->gyroscope();
-          body_stable = upright_alignment >= std::cos(kMaxTorsoTiltRad) &&
-              std::abs(angular_velocity[0]) <= kMaxTorsoAngularVelocity &&
-              std::abs(angular_velocity[1]) <= kMaxTorsoAngularVelocity &&
-              std::abs(angular_velocity[2]) <= kMaxTorsoAngularVelocity;
-        }
+        const auto angular_velocity = used_imu_torso_data_.data->gyroscope();
+        standing_body_diagnostics_ = EvaluateStandingBody(
+            {quaternion[0], quaternion[1], quaternion[2], quaternion[3]},
+            {angular_velocity[0], angular_velocity[1], angular_velocity[2]});
+        body_stable = standing_body_diagnostics_.ok;
       }
       const auto step = playback_protocol_.update(
           measured_position, measured_velocity, low_state_fresh, imu_fresh,
           PlaybackProtocol::Clock::now(), body_stable);
+      standing_diagnostics_ = step.standing;
 
       if (step.phase == PlaybackPhase::FAULT) {
         if (auto* zm = dynamic_cast<ZMQManager*>(input_interface_.get())) {
@@ -3336,6 +3331,34 @@ class G1Deploy {
       // command generated from the restored IDLE reference. The protocol
       // verifies that the robot has returned to its pre-action equilibrium.
       return true;
+    }
+
+    void PopulateStandingDiagnostics(OutputInterface::ControlStatus& status) const {
+      status.standing_active = standing_diagnostics_.active;
+      status.standing_elapsed_s = standing_diagnostics_.elapsed_s;
+      status.standing_max_joint_velocity =
+          standing_diagnostics_.max_abs_joint_velocity;
+      status.standing_velocity_tolerance = standing_diagnostics_.velocity_tolerance;
+      status.standing_velocity_ok = standing_diagnostics_.velocity_ok;
+      status.standing_max_recovery_displacement =
+          standing_diagnostics_.max_recovery_displacement;
+      status.standing_recovery_displacement_limit =
+          standing_diagnostics_.recovery_displacement_limit;
+      status.standing_recovery_ok = standing_diagnostics_.recovery_ok;
+      status.standing_position_reference_available =
+          standing_diagnostics_.position_reference_available;
+      status.standing_max_position_drift = standing_diagnostics_.max_position_drift;
+      status.standing_position_tolerance = standing_diagnostics_.position_tolerance;
+      status.standing_position_ok = standing_diagnostics_.position_ok;
+      status.standing_hold_elapsed_s = standing_diagnostics_.stable_hold_elapsed_s;
+      status.standing_hold_required_s = standing_diagnostics_.stable_hold_required_s;
+      status.standing_body_ok = standing_diagnostics_.body_ok;
+      status.standing_torso_tilt_rad = standing_body_diagnostics_.tilt_rad;
+      status.standing_torso_tilt_limit_rad = standing_body_diagnostics_.tilt_limit_rad;
+      status.standing_max_torso_angular_velocity =
+          standing_body_diagnostics_.max_abs_angular_velocity;
+      status.standing_torso_angular_velocity_limit =
+          standing_body_diagnostics_.angular_velocity_limit;
     }
 
     /// Enter the fail-closed playback state and revoke all pose-frame admission.
@@ -3363,6 +3386,7 @@ class G1Deploy {
         cs.playback_id = playback_protocol_.active_playback_id();
         cs.low_state_age_s = used_low_state_data_.GetAgeMs() / 1000.0;
         cs.imu_age_s = used_imu_torso_data_.GetAgeMs() / 1000.0;
+        PopulateStandingDiagnostics(cs);
         cs.input_type = input_type_;
         if (auto* zm = dynamic_cast<ZMQManager*>(input_interface_.get())) {
           cs.manager_mode = (zm->GetActiveMode() == ZMQManager::ManagedMode::STREAMED_MOTION)
@@ -4257,6 +4281,7 @@ class G1Deploy {
               cs.playback_id = playback_protocol_.active_playback_id();
               cs.low_state_age_s = used_low_state_data_.GetAgeMs() / 1000.0;
               cs.imu_age_s = used_imu_torso_data_.GetAgeMs() / 1000.0;
+              PopulateStandingDiagnostics(cs);
               cs.input_type = input_type_;
               if (auto* zm = dynamic_cast<ZMQManager*>(input_interface_.get())) {
                 cs.manager_mode = (zm->GetActiveMode() == ZMQManager::ManagedMode::STREAMED_MOTION)

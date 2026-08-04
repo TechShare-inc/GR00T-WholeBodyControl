@@ -84,7 +84,7 @@ class BaseSimulatorSchedulingTest(unittest.TestCase):
         viewer_stride = round(simulator.viewer_dt / simulator.sim_dt)
         self.assertLessEqual(max(env.render_gaps), viewer_stride)
 
-    def test_fall_reset_restores_configured_support_and_monotonic_time(self):
+    def test_fall_reset_preserves_released_support_and_monotonic_time(self):
         env = base_sim.DefaultEnv.__new__(base_sim.DefaultEnv)
         env.mj_model = object()
         env.mj_data = SimpleNamespace(time=12.5)
@@ -101,7 +101,7 @@ class BaseSimulatorSchedulingTest(unittest.TestCase):
             env.reset()
 
         self.assertEqual(env.mj_data.time, 12.5)
-        self.assertTrue(env.elastic_band.enable)
+        self.assertFalse(env.elastic_band.enable)
 
 
 if __name__ == "__main__":

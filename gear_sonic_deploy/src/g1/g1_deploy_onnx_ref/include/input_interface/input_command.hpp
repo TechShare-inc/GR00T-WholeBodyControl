@@ -83,14 +83,73 @@ inline const char* PlaybackPhaseName(PlaybackPhase phase) {
   return "FAULT";
 }
 
+struct StandingBodyDiagnostics {
+  bool ok = false;
+  double tilt_rad = -1.0;
+  double tilt_limit_rad = 0.70;
+  double max_abs_angular_velocity = -1.0;
+  double angular_velocity_limit = 0.35;
+};
+
+inline StandingBodyDiagnostics EvaluateStandingBody(
+    const std::array<double, 4>& quaternion_wxyz,
+    const std::array<double, 3>& angular_velocity,
+    double tilt_limit_rad = 0.70,
+    double angular_velocity_limit = 0.35) {
+  StandingBodyDiagnostics result;
+  result.tilt_limit_rad = tilt_limit_rad;
+  result.angular_velocity_limit = angular_velocity_limit;
+
+  const double w = quaternion_wxyz[0];
+  const double x = quaternion_wxyz[1];
+  const double y = quaternion_wxyz[2];
+  const double z = quaternion_wxyz[3];
+  const double norm_squared = w * w + x * x + y * y + z * z;
+  if (norm_squared <= 1e-12) {
+    return result;
+  }
+
+  const double upright_alignment =
+      1.0 - 2.0 * (x * x + y * y) / norm_squared;
+  result.tilt_rad = std::acos(std::clamp(upright_alignment, -1.0, 1.0));
+  result.max_abs_angular_velocity = std::max({
+      std::abs(angular_velocity[0]),
+      std::abs(angular_velocity[1]),
+      std::abs(angular_velocity[2])});
+  result.ok = result.tilt_rad <= result.tilt_limit_rad &&
+      result.max_abs_angular_velocity <= result.angular_velocity_limit;
+  return result;
+}
+
 class PlaybackProtocol {
  public:
   static constexpr size_t kJointCount = 29;
   using JointArray = std::array<double, kJointCount>;
   using Clock = std::chrono::steady_clock;
 
+  struct StandingDiagnostics {
+    bool active = false;
+    double elapsed_s = -1.0;
+    double max_abs_joint_velocity = -1.0;
+    double velocity_tolerance = -1.0;
+    bool velocity_ok = false;
+    double max_recovery_displacement = -1.0;
+    double recovery_displacement_limit = -1.0;
+    bool recovery_ok = false;
+    bool body_ok = false;
+    bool position_reference_available = false;
+    double max_position_drift = -1.0;
+    double position_tolerance = -1.0;
+    bool position_ok = false;
+    double stable_hold_elapsed_s = 0.0;
+    double stable_hold_required_s = -1.0;
+    bool low_state_fresh = false;
+    bool imu_fresh = false;
+  };
+
   struct StepResult {
     PlaybackPhase phase = PlaybackPhase::STABLE_STANDING;
+    StandingDiagnostics standing;
   };
 
   explicit PlaybackProtocol(
@@ -124,6 +183,7 @@ class PlaybackProtocol {
     stable_since_.reset();
     settled_reference_position_.reset();
     qualification_reference_pending_ = false;
+    initial_qualification_active_ = false;
     return true;
   }
 
@@ -133,6 +193,7 @@ class PlaybackProtocol {
     stable_since_.reset();
     settled_reference_position_.reset();
     qualification_reference_pending_ = true;
+    initial_qualification_active_ = true;
     phase_ = PlaybackPhase::RETURN_TO_STAND;
   }
 
@@ -150,6 +211,7 @@ class PlaybackProtocol {
     stable_since_.reset();
     settled_reference_position_.reset();
     qualification_reference_pending_ = false;
+    initial_qualification_active_ = false;
     phase_ = PlaybackPhase::RETURN_TO_STAND;
     return true;
   }
@@ -181,6 +243,25 @@ class PlaybackProtocol {
     }
 
     if (phase_ == PlaybackPhase::RETURN_TO_STAND) {
+      result.standing.active = true;
+      result.standing.elapsed_s =
+          std::chrono::duration<double>(now - return_started_at_).count();
+      result.standing.velocity_tolerance = velocity_tolerance_;
+      result.standing.recovery_displacement_limit = max_recovery_displacement_;
+      result.standing.position_tolerance = position_tolerance_;
+      result.standing.stable_hold_required_s = stable_hold_s_;
+      result.standing.low_state_fresh = low_state_fresh;
+      result.standing.imu_fresh = imu_fresh;
+      result.standing.body_ok = body_stable;
+      result.standing.max_abs_joint_velocity = 0.0;
+      for (size_t i = 0; i < kJointCount; ++i) {
+        result.standing.max_abs_joint_velocity = std::max(
+            result.standing.max_abs_joint_velocity,
+            std::abs(measured_velocity[i]));
+      }
+      result.standing.velocity_ok =
+          result.standing.max_abs_joint_velocity <= velocity_tolerance_;
+
       if (!low_state_fresh || !imu_fresh) {
         fault();
         result.phase = phase_;
@@ -192,21 +273,41 @@ class PlaybackProtocol {
         qualification_reference_pending_ = false;
       }
 
-      const double elapsed =
-          std::chrono::duration<double>(now - return_started_at_).count();
-      if (elapsed >= return_timeout_s_) {
+      result.standing.max_recovery_displacement = 0.0;
+      for (size_t i = 0; i < kJointCount; ++i) {
+        result.standing.max_recovery_displacement = std::max(
+            result.standing.max_recovery_displacement,
+            std::abs(measured_position[i] - standing_reference_position_[i]));
+      }
+      result.standing.recovery_ok =
+          result.standing.max_recovery_displacement <= max_recovery_displacement_;
+
+      result.standing.position_reference_available =
+          settled_reference_position_.has_value();
+      if (settled_reference_position_.has_value()) {
+        result.standing.max_position_drift = 0.0;
+        for (size_t i = 0; i < kJointCount; ++i) {
+          result.standing.max_position_drift = std::max(
+              result.standing.max_position_drift,
+              std::abs(measured_position[i] - (*settled_reference_position_)[i]));
+        }
+        result.standing.position_ok =
+            result.standing.max_position_drift <= position_tolerance_;
+      }
+      if (stable_since_.has_value()) {
+        result.standing.stable_hold_elapsed_s =
+            std::chrono::duration<double>(now - *stable_since_).count();
+      }
+
+      const double elapsed = result.standing.elapsed_s;
+      if (!initial_qualification_active_ && elapsed >= return_timeout_s_) {
         fault();
         result.phase = phase_;
         return result;
       }
       if (elapsed >= return_duration_s_) {
-        bool velocity_settled_and_recoverable = true;
-        for (size_t i = 0; i < kJointCount; ++i) {
-          velocity_settled_and_recoverable = velocity_settled_and_recoverable &&
-              std::abs(measured_position[i] - standing_reference_position_[i]) <=
-                  max_recovery_displacement_ &&
-              std::abs(measured_velocity[i]) <= velocity_tolerance_;
-        }
+        const bool velocity_settled_and_recoverable =
+            result.standing.velocity_ok && result.standing.recovery_ok;
         if (!velocity_settled_and_recoverable || !body_stable) {
           stable_since_.reset();
           settled_reference_position_.reset();
@@ -217,18 +318,14 @@ class PlaybackProtocol {
           stable_since_ = now;
           settled_reference_position_ = measured_position;
         } else {
-          bool position_settled = true;
-          for (size_t i = 0; i < kJointCount; ++i) {
-            position_settled = position_settled &&
-                std::abs(measured_position[i] - (*settled_reference_position_)[i]) <=
-                    position_tolerance_;
-          }
+          const bool position_settled = result.standing.position_ok;
           if (!position_settled) {
             stable_since_ = now;
             settled_reference_position_ = measured_position;
           } else if (std::chrono::duration<double>(now - *stable_since_).count() >=
                      stable_hold_s_) {
             phase_ = PlaybackPhase::STABLE_STANDING;
+            initial_qualification_active_ = false;
             result.phase = phase_;
           }
         }
@@ -241,6 +338,7 @@ class PlaybackProtocol {
   void fault() {
     phase_ = PlaybackPhase::FAULT;
     stable_since_.reset();
+    initial_qualification_active_ = false;
   }
 
   PlaybackPhase phase() const { return phase_; }
@@ -261,6 +359,7 @@ class PlaybackProtocol {
   std::optional<Clock::time_point> stable_since_;
   std::optional<JointArray> settled_reference_position_;
   bool qualification_reference_pending_ = false;
+  bool initial_qualification_active_ = false;
 };
 
 // ---------------------------------------------------------------------------

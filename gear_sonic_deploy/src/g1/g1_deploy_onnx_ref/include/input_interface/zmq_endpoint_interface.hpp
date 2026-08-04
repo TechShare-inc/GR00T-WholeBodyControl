@@ -298,8 +298,10 @@ public:
                 // motion context to produce a closed-loop balancing command
                 // while no streamed action is active.
                 idle_reference_motion_ = temp_motion;
+                idle_reference_frame_ = std::clamp(
+                    current_frame, 0, std::max(0, idle_reference_motion_->timesteps - 1));
                 current_motion = idle_reference_motion_;
-                current_frame = 0;
+                current_frame = idle_reference_frame_;
                 if (has_planner && planner_state.enabled) {
                     planner_state.enabled = false;
                     planner_state.initialized = false;
@@ -311,7 +313,8 @@ public:
             use_zmq_stream = false;
             ResetStreamedMotion(); // Reset motion merger and protocol version
             
-            std::cout << "Safety reset: ZMQ streaming disabled, returned to reference motion at frame 0" << std::endl;
+            std::cout << "Safety reset: ZMQ streaming disabled, returned to reference motion at frame "
+                      << idle_reference_frame_ << std::endl;
         }
 
         // Handle ZMQ mode toggle
@@ -647,7 +650,7 @@ public:
             // Return to the IDLE planner context captured before streamed
             // mode. A preloaded action is not a safe standing fallback.
             current_motion = idle_reference_motion_;
-            current_frame = 0;
+            current_frame = idle_reference_frame_;
             if (current_motion && current_motion->GetEncodeMode() >= 0) {
                 current_motion->SetEncodeMode(0);
             }
@@ -1944,6 +1947,8 @@ private:
     int64_t admitted_playback_id_ = 0;
     /// Planner-generated IDLE context used by SONIC for balanced standing.
     std::shared_ptr<const MotionSequence> idle_reference_motion_{};
+    /// Settled frame within the frozen planner IDLE context.
+    int idle_reference_frame_ = 0;
     
 };
 
