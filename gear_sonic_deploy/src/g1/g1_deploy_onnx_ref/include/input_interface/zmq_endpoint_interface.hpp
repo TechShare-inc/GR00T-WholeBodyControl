@@ -604,17 +604,24 @@ public:
     /// Admit pose frames only after the controller accepts the matching
     /// playback-start marker. Closing admission also discards any pose that
     /// raced ahead of the lifecycle acknowledgement.
-    void SetPlaybackFrameAdmission(int64_t playback_id, bool admitted) {
+    void SetPlaybackFrameAdmission(int64_t controller_epoch, int64_t playback_id, bool admitted) {
         std::lock_guard<std::mutex> lock(data_mutex_);
         if (admitted && playback_id > 0) {
+            admitted_controller_epoch_ = controller_epoch;
             admitted_playback_id_ = playback_id;
             return;
         }
-        if (admitted_playback_id_ == playback_id) {
+        if (admitted_controller_epoch_ == controller_epoch &&
+            admitted_playback_id_ == playback_id) {
+            admitted_controller_epoch_ = 0;
             admitted_playback_id_ = 0;
             has_new_data_ = false;
             buffered_buffers_.clear();
         }
+    }
+
+    void SetPlaybackFrameAdmission(int64_t playback_id, bool admitted) {
+        SetPlaybackFrameAdmission(1, playback_id, admitted);
     }
 
     /**
@@ -725,6 +732,7 @@ private:
         int joint_pos_idx = -1, joint_vel_idx = -1, body_quat_idx = -1, frame_index_idx = -1, smpl_joints_idx = -1, smpl_pose_idx = -1;
         int left_hand_joints_idx = -1, right_hand_joints_idx = -1, catch_up_idx = -1;
         int token_state_idx = -1;  // Protocol v4: token-only streaming
+        int controller_epoch_idx = -1, playback_id_idx = -1;
         int heading_increment_idx = -1;
         int timestamp_monotonic_idx = -1;
         // VR 3-point tracking fields (optional)
@@ -742,6 +750,8 @@ private:
             else if (f.name == "right_hand_joints") right_hand_joints_idx = static_cast<int>(i);
             else if (f.name == "catch_up") catch_up_idx = static_cast<int>(i);
             else if (f.name == "token_state") token_state_idx = static_cast<int>(i);
+            else if (f.name == "controller_epoch") controller_epoch_idx = static_cast<int>(i);
+            else if (f.name == "playback_id") playback_id_idx = static_cast<int>(i);
             else if (f.name == "heading_increment") heading_increment_idx = static_cast<int>(i);
             else if (f.name == "timestamp_monotonic") timestamp_monotonic_idx = static_cast<int>(i);
             // VR 3-point tracking fields
@@ -750,8 +760,8 @@ private:
             else if (f.name == "vr_compliance") vr_compliance_idx = static_cast<int>(i);
         }
         
-        // ===== PROTOCOL VERSION 4: Token-Only Streaming (check first, has different requirements) =====
-        if (protocol_version == 4) {
+        // ===== PROTOCOL VERSION 4: Token-only or motion streaming =====
+        if (protocol_version == 4 && token_state_idx >= 0 && joint_pos_idx < 0) {
             // Token-only mode - no motion data, just tokens for the policy
             if (token_state_idx < 0) {
                 std::cerr << "[ZMQEndpointInterface] Version 4 missing required field 'token_state'" << std::endl;
@@ -957,7 +967,7 @@ private:
             return result;
         }
         
-        if (protocol_version == 2 || protocol_version == 3) {
+        if (protocol_version == 2 || protocol_version == 3 || protocol_version == 4) {
             // Version 2/3: require smpl_joints, smpl_pose (joint_pos/joint_vel optional for v2, required for v3)
             if (smpl_joints_idx < 0) {
                 std::cerr << "[ZMQEndpointInterface] Version " << protocol_version
@@ -969,7 +979,7 @@ private:
                           << " missing required field 'smpl_pose'" << std::endl;
                 return result;
             }
-            if (protocol_version == 3) {
+            if (protocol_version == 3 || protocol_version == 4) {
                 // Version 3 additionally requires joint_pos and joint_vel
                 if (joint_pos_idx < 0 ) {
                     std::cerr << "[ZMQEndpointInterface] Version 3 missing required field 'joint_pos'" << std::endl;
@@ -997,7 +1007,7 @@ private:
         int num_joints = 0;
         
         // Get num_frames from the primary required field for each version
-        if (protocol_version == 2 || protocol_version == 3) {
+        if (protocol_version == 2 || protocol_version == 3 || protocol_version == 4) {
             // Version 2/3: Get num_frames from smpl_joints (required)
             const auto& smpl_field = buffered_header_.fields[smpl_joints_idx];
             if (smpl_field.shape.size() < 2) {
@@ -1011,7 +1021,7 @@ private:
             }
 
             // For version 3, also validate that joint_pos has consistent frame count
-            if (protocol_version == 3) {
+            if (protocol_version == 3 || protocol_version == 4) {
                 const auto& joint_pos_field = buffered_header_.fields[joint_pos_idx];
                 if (joint_pos_field.shape.size() != 2) {
                     std::cerr << "[ZMQEndpointInterface] Version 3 has invalid joint_pos shape (expected [N, num_joints])" << std::endl;
@@ -1544,7 +1554,7 @@ private:
             }
             
             // Print frame indices for protocol v3 (SMPL actions)
-            if (protocol_version == 3 && !frame_indices.empty()) {
+            if ((protocol_version == 3 || protocol_version == 4) && !frame_indices.empty()) {
                 if (frame_indices.size() == 1) {
                     std::cout << "[ZMQEndpointInterface] Protocol v3: Received SMPL action (single) - frame_index: " 
                               << frame_indices[0] << std::endl;
@@ -1781,8 +1791,9 @@ private:
         // Convert MergeResult to DecodeResult
         if (active_protocol_version_ == 1) {
             merge_result.motion->SetEncodeMode(0);  // Protocol 1: joint-based
-        } else if (active_protocol_version_ == 2 || active_protocol_version_ == 3) {
-            // Protocol versions 2 and 3 both use encoder mode 2 (SMPL-based)
+        } else if (active_protocol_version_ == 2 || active_protocol_version_ == 3 ||
+                   active_protocol_version_ == 4) {
+            // Protocol versions 2, 3, and 4 motion frames use encoder mode 2.
             merge_result.motion->SetEncodeMode(2);
         }
         result.motion = merge_result.motion;
@@ -1891,6 +1902,38 @@ private:
         if (admitted_playback_id_ <= 0) {
             return;
         }
+
+        if (hdr.version == 4) {
+            int joint_pos_idx = -1;
+            int epoch_idx = -1;
+            int playback_idx = -1;
+            for (size_t i = 0; i < hdr.fields.size(); ++i) {
+                if (hdr.fields[i].name == "joint_pos") joint_pos_idx = static_cast<int>(i);
+                if (hdr.fields[i].name == "controller_epoch") epoch_idx = static_cast<int>(i);
+                if (hdr.fields[i].name == "playback_id") playback_idx = static_cast<int>(i);
+            }
+            // Token-only v4 remains valid without playback correlation. Motion
+            // v4 must carry the epoch and playback id on every message.
+            if (joint_pos_idx >= 0) {
+                if (epoch_idx < 0 || playback_idx < 0 ||
+                    epoch_idx >= static_cast<int>(bufs.size()) ||
+                    playback_idx >= static_cast<int>(bufs.size()) ||
+                    bufs[epoch_idx].size < sizeof(int64_t) ||
+                    bufs[playback_idx].size < sizeof(int64_t)) {
+                    return;
+                }
+                const bool needs_swap = hdr.NeedsByteSwap();
+                const auto read_i64 = [needs_swap](const auto& buffer) {
+                    int64_t value = 0;
+                    std::memcpy(&value, buffer.data, sizeof(value));
+                    return needs_swap ? byte_swap(value) : value;
+                };
+                if (read_i64(bufs[epoch_idx]) != admitted_controller_epoch_ ||
+                    read_i64(bufs[playback_idx]) != admitted_playback_id_) {
+                    return;
+                }
+            }
+        }
         
         if (verbose_) {
             std::cout << "[ZMQEndpointInterface] Received ZMQ message - topic: '" << topic
@@ -1944,6 +1987,7 @@ private:
     uint64_t receive_count_ = 0;       ///< Total number of messages received.
     uint64_t last_decode_time_ = 0;    ///< Timestamp of last DecodeIntoMotionSequence call (ms).
     std::optional<int64_t> last_accepted_frame_index_{};
+    int64_t admitted_controller_epoch_ = 0;
     int64_t admitted_playback_id_ = 0;
     /// Planner-generated IDLE context used by SONIC for balanced standing.
     std::shared_ptr<const MotionSequence> idle_reference_motion_{};

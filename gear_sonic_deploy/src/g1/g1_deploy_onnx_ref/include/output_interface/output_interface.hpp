@@ -127,6 +127,15 @@ public:
       int64_t last_accepted_frame_index = -1;
       std::string playback_phase = "STABLE_STANDING";
       int64_t playback_id = 0;
+      int32_t protocol_revision = 4;
+      int64_t controller_epoch = 1;
+      std::string reference_state = "IDLE";
+      std::string action_state = "NONE";
+      std::string standing_state = "STABLE";
+      std::string health_state = "HEALTHY";
+      std::string last_action_outcome = "NONE";
+      std::string standing_profile_digest;
+      bool standing_evaluated = false;
       uint64_t heartbeat_sequence = 0;
       bool standing_active = false;
       double standing_elapsed_s = -1.0;

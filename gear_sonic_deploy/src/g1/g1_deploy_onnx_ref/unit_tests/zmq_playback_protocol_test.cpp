@@ -118,7 +118,7 @@ TEST(ZMQPlaybackProtocolTest, DecodesTaggedMarkersAndDefersStaleCompletion) {
   manager.update();
   const auto playback_start = manager.ConsumePlaybackStart();
   ASSERT_TRUE(playback_start.has_value());
-  EXPECT_EQ(*playback_start, 17);
+  EXPECT_EQ(playback_start->playback_id, 17);
 
   send(BuildCommand(false, true));
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -169,8 +169,10 @@ TEST(ZMQPlaybackProtocolTest, LoopbackMarkersDriveControllerReturnToStandProtoco
   manager.update();
   const auto playback_start = manager.ConsumePlaybackStart();
   ASSERT_TRUE(playback_start.has_value());
-  ASSERT_TRUE(protocol.start_action(*playback_start, defaults));
-  manager.SetPlaybackFrameAdmission(*playback_start, true);
+  ASSERT_TRUE(protocol.start_action(
+      playback_start->controller_epoch, playback_start->playback_id, defaults));
+  manager.SetPlaybackFrameAdmission(
+      playback_start->controller_epoch, playback_start->playback_id, true);
 
   // ZMQManager applies the mode-switch marker during update(), then the
   // control loop applies the safety reset and enables pose streaming during
@@ -235,7 +237,7 @@ TEST(ZMQPlaybackProtocolTest, LoopbackMarkersDriveControllerReturnToStandProtoco
   EXPECT_EQ(
       protocol.update(
           defaults, velocities, true, false, t0 + std::chrono::milliseconds(1300)).phase,
-      PlaybackPhase::FAULT);
+      PlaybackPhase::RETURN_TO_STAND);
 }
 
 TEST(ZMQPlaybackProtocolTest, StreamModeResetPreservesSettledIdleFrame) {
@@ -336,7 +338,8 @@ TEST(ZMQPlaybackProtocolTest, RejectedPlaybackStartDoesNotAdmitPoseFrames) {
   manager.update();
   const auto playback_start = manager.ConsumePlaybackStart();
   ASSERT_TRUE(playback_start.has_value());
-  manager.SetPlaybackFrameAdmission(*playback_start, false);
+  manager.SetPlaybackFrameAdmission(
+      playback_start->controller_epoch, playback_start->playback_id, false);
   manager.handle_input(
       motion_reader, current_motion, current_frame, operator_state,
       reinitialize_heading, heading_state_buffer, true, planner_state,
@@ -369,5 +372,5 @@ TEST(ZMQPlaybackProtocolTest, DecodesCorrelatedPlaybackAbort) {
 
   const auto abort = manager.ConsumePlaybackAbort();
   ASSERT_TRUE(abort.has_value());
-  EXPECT_EQ(*abort, 17);
+  EXPECT_EQ(abort->playback_id, 17);
 }

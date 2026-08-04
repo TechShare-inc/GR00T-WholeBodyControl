@@ -214,7 +214,7 @@ public:
 
         msgpack::sbuffer sbuf;
         msgpack::packer<msgpack::sbuffer> pk(&sbuf);
-        pk.pack_map(32);
+        pk.pack_map(41);
         pk.pack("instance_id");     pk.pack(status.instance_id);
         pk.pack("control_started"); pk.pack(status.control_started);
         pk.pack("control_stopped"); pk.pack(status.control_stopped);
@@ -227,6 +227,15 @@ public:
         pk.pack("last_accepted_frame_index"); pk.pack(status.last_accepted_frame_index);
         pk.pack("playback_phase");     pk.pack(status.playback_phase);
         pk.pack("playback_id");        pk.pack(status.playback_id);
+        pk.pack("protocol_revision");  pk.pack(status.protocol_revision);
+        pk.pack("controller_epoch");   pk.pack(status.controller_epoch);
+        pk.pack("reference_state");    pk.pack(status.reference_state);
+        pk.pack("action_state");       pk.pack(status.action_state);
+        pk.pack("standing_state");     pk.pack(status.standing_state);
+        pk.pack("health_state");       pk.pack(status.health_state);
+        pk.pack("last_action_outcome"); pk.pack(status.last_action_outcome);
+        pk.pack("standing_profile_digest"); pk.pack(status.standing_profile_digest);
+        pk.pack("standing_evaluated"); pk.pack(status.standing_evaluated);
         pk.pack("heartbeat_sequence"); pk.pack(++control_status_sequence_);
         pk.pack("standing_active"); pk.pack(status.standing_active);
         pk.pack("standing_elapsed_s"); pk.pack(status.standing_elapsed_s);
