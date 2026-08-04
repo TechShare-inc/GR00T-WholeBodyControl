@@ -280,16 +280,29 @@ class ZMQManager : public InputInterface {
           }
 
           // Preserve controller-owned playback markers for the control loop.
-          if (latest_command_.playback_start && latest_command_.playback_id > 0) {
-            pending_playback_start_ = latest_command_.playback_id;
+          if ((latest_command_.playback_start || latest_command_.action_event == 1) &&
+              latest_command_.playback_id > 0) {
+            pending_playback_start_ = PlaybackMarker{
+                latest_command_.controller_epoch, latest_command_.playback_id};
           }
-          if (latest_command_.playback_abort && latest_command_.playback_id > 0) {
-            pending_playback_abort_ = latest_command_.playback_id;
+          if ((latest_command_.playback_abort ||
+               (latest_command_.action_event == 2 && latest_command_.action_outcome != 1)) &&
+              latest_command_.playback_id > 0) {
+            pending_playback_abort_ = ActionEndMarker{
+                latest_command_.controller_epoch,
+                latest_command_.playback_id,
+                latest_command_.terminal_frame_index,
+                latest_command_.action_outcome == 0 ? 3 : latest_command_.action_outcome};
           }
-          if (latest_command_.normal_completion && latest_command_.playback_id > 0 &&
+          if ((latest_command_.normal_completion ||
+               (latest_command_.action_event == 2 && latest_command_.action_outcome == 1)) &&
+              latest_command_.playback_id > 0 &&
               latest_command_.terminal_frame_index >= 0) {
-            pending_normal_completion_ = NormalCompletionMarker{
-                latest_command_.playback_id, latest_command_.terminal_frame_index};
+            pending_normal_completion_ = ActionEndMarker{
+                latest_command_.controller_epoch,
+                latest_command_.playback_id,
+                latest_command_.terminal_frame_index,
+                1};
           }
 
           // Clear valid flag - next callback will start fresh accumulation
@@ -464,13 +477,20 @@ class ZMQManager : public InputInterface {
       return {};
     }
 
-    struct NormalCompletionMarker {
+    struct PlaybackMarker {
+      int64_t controller_epoch = 1;
+      int64_t playback_id = 0;
+    };
+
+    struct ActionEndMarker {
+      int64_t controller_epoch = 1;
       int64_t playback_id = 0;
       int64_t terminal_frame_index = -1;
+      int32_t outcome = 0;
     };
 
     /// Consume a playback-start marker after the command subscriber has latched it.
-    std::optional<int64_t> ConsumePlaybackStart() {
+    std::optional<PlaybackMarker> ConsumePlaybackStart() {
       std::lock_guard<std::mutex> lock(command_mutex_);
       if (!pending_playback_start_.has_value()) {
         return {};
@@ -481,7 +501,7 @@ class ZMQManager : public InputInterface {
     }
 
     /// Consume an abnormal playback termination marker.
-    std::optional<int64_t> ConsumePlaybackAbort() {
+    std::optional<ActionEndMarker> ConsumePlaybackAbort() {
       std::lock_guard<std::mutex> lock(command_mutex_);
       if (!pending_playback_abort_.has_value()) {
         return {};
@@ -492,14 +512,18 @@ class ZMQManager : public InputInterface {
     }
 
     /// Open or close pose-frame admission for a controller-accepted playback.
-    void SetPlaybackFrameAdmission(int64_t playback_id, bool admitted) {
+    void SetPlaybackFrameAdmission(int64_t controller_epoch, int64_t playback_id, bool admitted) {
       if (pose_interface_) {
-        pose_interface_->SetPlaybackFrameAdmission(playback_id, admitted);
+        pose_interface_->SetPlaybackFrameAdmission(controller_epoch, playback_id, admitted);
       }
     }
 
+    void SetPlaybackFrameAdmission(int64_t playback_id, bool admitted) {
+      SetPlaybackFrameAdmission(1, playback_id, admitted);
+    }
+
     /// Consume normal completion only after the streamed terminal frame was accepted.
-    std::optional<NormalCompletionMarker> ConsumeNormalCompletionIfReady() {
+    std::optional<ActionEndMarker> ConsumeNormalCompletionIfReady() {
       std::lock_guard<std::mutex> lock(command_mutex_);
       if (!pending_normal_completion_.has_value()) {
         return {};
@@ -775,6 +799,8 @@ class ZMQManager : public InputInterface {
       int start_idx = -1, stop_idx = -1, planner_idx = -1;
       int playback_start_idx = -1, normal_completion_idx = -1;
       int playback_abort_idx = -1;
+      int protocol_revision_idx = -1, action_event_idx = -1, action_outcome_idx = -1;
+      int controller_epoch_idx = -1;
       int playback_id_idx = -1, terminal_frame_index_idx = -1;
       for (size_t i = 0; i < hdr.fields.size(); ++i) {
         if (hdr.fields[i].name == "start") start_idx = static_cast<int>(i);
@@ -783,6 +809,10 @@ class ZMQManager : public InputInterface {
         else if (hdr.fields[i].name == "playback_start") playback_start_idx = static_cast<int>(i);
         else if (hdr.fields[i].name == "normal_completion") normal_completion_idx = static_cast<int>(i);
         else if (hdr.fields[i].name == "playback_abort") playback_abort_idx = static_cast<int>(i);
+        else if (hdr.fields[i].name == "protocol_revision") protocol_revision_idx = static_cast<int>(i);
+        else if (hdr.fields[i].name == "action_event") action_event_idx = static_cast<int>(i);
+        else if (hdr.fields[i].name == "action_outcome") action_outcome_idx = static_cast<int>(i);
+        else if (hdr.fields[i].name == "controller_epoch") controller_epoch_idx = static_cast<int>(i);
         else if (hdr.fields[i].name == "playback_id") playback_id_idx = static_cast<int>(i);
         else if (hdr.fields[i].name == "terminal_frame_index") terminal_frame_index_idx = static_cast<int>(i);
       }
@@ -862,11 +892,27 @@ class ZMQManager : public InputInterface {
         std::memcpy(&value, bufs[index].data, sizeof(value));
         if (needs_swap) value = byte_swap(value);
       };
+      auto decode_i32 = [&](int index, int32_t& value) {
+        if (index < 0 || bufs[index].size < sizeof(int32_t)) return;
+        std::memcpy(&value, bufs[index].data, sizeof(value));
+        if (needs_swap) value = byte_swap(value);
+      };
       decode_u8(playback_start_idx, cmd.playback_start);
       decode_u8(normal_completion_idx, cmd.normal_completion);
       decode_u8(playback_abort_idx, cmd.playback_abort);
       decode_i64(playback_id_idx, cmd.playback_id);
       decode_i64(terminal_frame_index_idx, cmd.terminal_frame_index);
+      decode_i32(protocol_revision_idx, cmd.protocol_revision);
+      decode_i32(action_event_idx, cmd.action_event);
+      decode_i32(action_outcome_idx, cmd.action_outcome);
+      decode_i64(controller_epoch_idx, cmd.controller_epoch);
+      if (cmd.protocol_revision >= 4) {
+        if (cmd.action_event == 0) {
+          cmd.action_event = cmd.playback_start ? 1 : ((cmd.normal_completion || cmd.playback_abort) ? 2 : 0);
+        }
+        if (cmd.action_outcome == 0 && cmd.normal_completion) cmd.action_outcome = 1;
+        if (cmd.action_outcome == 0 && cmd.playback_abort) cmd.action_outcome = 3;
+      }
 
       // Update buffer with OR logic to accumulate start/stop signals
       std::lock_guard<std::mutex> lock(command_mutex_);
@@ -880,6 +926,10 @@ class ZMQManager : public InputInterface {
         latest_command_.playback_abort = false;
         latest_command_.playback_id = 0;
         latest_command_.terminal_frame_index = -1;
+        latest_command_.protocol_revision = cmd.protocol_revision;
+        latest_command_.action_event = 0;
+        latest_command_.action_outcome = 0;
+        latest_command_.controller_epoch = cmd.controller_epoch;
       }
       
       // Accumulate start/stop with OR logic
@@ -895,6 +945,10 @@ class ZMQManager : public InputInterface {
       if (cmd.terminal_frame_index >= 0) {
         latest_command_.terminal_frame_index = cmd.terminal_frame_index;
       }
+      latest_command_.protocol_revision = cmd.protocol_revision;
+      latest_command_.controller_epoch = cmd.controller_epoch;
+      if (cmd.action_event != 0) latest_command_.action_event = cmd.action_event;
+      if (cmd.action_outcome != 0) latest_command_.action_outcome = cmd.action_outcome;
       latest_command_.valid = true;
       
       if constexpr (DEBUG_LOGGING) {
@@ -1368,9 +1422,9 @@ class ZMQManager : public InputInterface {
     
     std::mutex command_mutex_;          ///< Guards access to latest_command_ and pending markers.
     CommandMessage latest_command_;     ///< Most recent (or accumulated) command message.
-    std::optional<int64_t> pending_playback_start_;
-    std::optional<int64_t> pending_playback_abort_;
-    std::optional<NormalCompletionMarker> pending_normal_completion_;
+    std::optional<PlaybackMarker> pending_playback_start_;
+    std::optional<ActionEndMarker> pending_playback_abort_;
+    std::optional<ActionEndMarker> pending_normal_completion_;
     
     std::mutex planner_mutex_;          ///< Guards access to latest_planner_message_.
     PlannerMessage latest_planner_message_;  ///< Most recent planner movement message.

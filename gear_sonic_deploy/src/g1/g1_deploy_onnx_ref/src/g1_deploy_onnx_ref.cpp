@@ -111,6 +111,7 @@
 #include "../include/input_interface/keyboard_handler.hpp"
 #include "../include/input_interface/gamepad.hpp"
 #include "../include/input_interface/zmq_endpoint_interface.hpp"
+#include "../include/input_interface/standing_profile.hpp"
 #include "../include/input_interface/interface_manager.hpp"
 #include "../include/input_interface/gamepad_manager.hpp"
 #include "../include/input_interface/zmq_manager.hpp"
@@ -181,6 +182,7 @@ class G1Deploy {
     double planner_dt_;    ///< Planner loop period  (10 Hz = 0.1 s).
     double input_dt_;      ///< Input poll period    (100 Hz = 0.01 s).
     double duration_;      ///< Duration of the INIT ramp-up to default pose (3 s).
+    StandingProfile standing_profile_; ///< Shared standing profile loaded at startup.
     PlaybackProtocol playback_protocol_; ///< Controller-owned playback lifecycle.
     PlaybackProtocol::StandingDiagnostics standing_diagnostics_;
     StandingBodyDiagnostics standing_body_diagnostics_;
@@ -2218,14 +2220,22 @@ class G1Deploy {
       std::string zmq_out_topic = "g1_debug",
       bool enable_motion_recording = false,
       std::array<double, 3> initial_compliance = {0.05, 0.05, 0.0},
-      double initial_max_close_ratio = 1.0)
+      double initial_max_close_ratio = 1.0,
+      std::string standing_profile_path = "")
       : time_(0.0),
         publish_dt_(0.002),
         control_dt_(0.02),
         planner_dt_(0.1),
         input_dt_(0.01),
         duration_(3.0),
-        playback_protocol_(duration_),
+        standing_profile_(StandingProfile::Load(standing_profile_path)),
+        playback_protocol_(
+            standing_profile_.minimum_recovery_interval_s,
+            standing_profile_.position_drift_tolerance_rad,
+            standing_profile_.joint_velocity_tolerance_rad_s,
+            standing_profile_.stable_hold_s,
+            standing_profile_.recovery_displacement_limit_rad,
+            standing_profile_.post_action_recovery_timeout_s),
         counter_(0),
         mode_pr_(Mode::PR),
         mode_machine_(0),
@@ -3229,15 +3239,37 @@ class G1Deploy {
           for (size_t i = 0; i < G1_NUM_MOTOR; ++i) {
             standing_position[i] = low_state->motor_state()[i].q();
           }
-          admitted = playback_protocol_.start_action(*playback_start, standing_position);
+          admitted = playback_protocol_.start_action(
+              playback_start->controller_epoch,
+              playback_start->playback_id,
+              standing_position);
+          if (admitted) {
+            standing_diagnostics_ = {};
+            standing_body_diagnostics_ = {};
+          }
         }
-        zm->SetPlaybackFrameAdmission(*playback_start, admitted);
+        zm->SetPlaybackFrameAdmission(
+            playback_start->controller_epoch, playback_start->playback_id, admitted);
       }
 
       if (auto playback_abort = zm->ConsumePlaybackAbort(); playback_abort.has_value()) {
-        if (playback_protocol_.abort_action(*playback_abort)) {
-          zm->SetPlaybackFrameAdmission(*playback_abort, false);
+        ActionOutcome outcome = ActionOutcome::CANCELLED;
+        if (playback_abort->outcome == 2) outcome = ActionOutcome::DIAGNOSTIC_FAILED;
+        if (playback_abort->outcome == 4) outcome = ActionOutcome::STREAM_FAILED;
+        if (playback_abort->outcome == 5) outcome = ActionOutcome::STAND_RECOVERY_TIMEOUT;
+        if (playback_protocol_.abort_action(
+                playback_abort->controller_epoch,
+                playback_abort->playback_id,
+                outcome,
+                PlaybackProtocol::Clock::now())) {
+          zm->SetPlaybackFrameAdmission(
+              playback_abort->controller_epoch, playback_abort->playback_id, false);
           operator_state.play = false;
+          if (!zm->ReturnToReferenceMotion(
+                  current_motion_, current_frame_, operator_state,
+                  reinitialize_heading_, current_motion_mutex_)) {
+            EnterPlaybackFault();
+          }
         }
       }
 
@@ -3249,11 +3281,13 @@ class G1Deploy {
         const auto accepted = zm->GetLastAcceptedFrameIndex();
         if (low_state && accepted.has_value()) {
           if (playback_protocol_.request_return_to_stand(
+                  completion->controller_epoch,
                   completion->playback_id,
                   completion->terminal_frame_index,
                   *accepted,
                   PlaybackProtocol::Clock::now())) {
-            zm->SetPlaybackFrameAdmission(completion->playback_id, false);
+            zm->SetPlaybackFrameAdmission(
+                completion->controller_epoch, completion->playback_id, false);
             operator_state.play = false;
             if (!zm->ReturnToReferenceMotion(
                     current_motion_,
@@ -3275,22 +3309,14 @@ class G1Deploy {
      * ProcessPlaybackMarkers() restores its planner-generated IDLE reference;
      * this hook observes settling and handles faults without replacing the
      * closed-loop balancing output with an open-loop joint PD command.
-     * @return False when the protocol entered FAULT and damping must remain active.
+     * @return True while the WBC remains resident, including action diagnostics
+     * and stand-recovery timeout outcomes.
      */
     bool ApplyPlaybackProtocol(const OperatorState& operator_state) {
       if (operator_state.stop) {
         return true;
       }
       if (playback_protocol_.phase() == PlaybackPhase::ACTION) {
-        standing_diagnostics_ = {};
-        return true;
-      }
-
-      // No playback lifecycle is active. CreatePolicyCommand() has already
-      // produced SONIC's balancing command from the cached IDLE reference.
-      if (playback_protocol_.active_playback_id() <= 0 &&
-          playback_protocol_.phase() == PlaybackPhase::STABLE_STANDING) {
-        standing_diagnostics_ = {};
         return true;
       }
 
@@ -3301,9 +3327,9 @@ class G1Deploy {
         measured_velocity[i] = used_low_state_data_.data->motor_state()[i].dq();
       }
       const bool low_state_fresh = used_low_state_data_.GetAgeMs() >= 0.0 &&
-          used_low_state_data_.GetAgeMs() <= LOW_STATE_ABSENT_THRESHOLD.count();
+          used_low_state_data_.GetAgeMs() <= standing_profile_.low_state_freshness_limit_s * 1000.0;
       const bool imu_fresh = used_imu_torso_data_.GetAgeMs() >= 0.0 &&
-          used_imu_torso_data_.GetAgeMs() <= LOW_STATE_ABSENT_THRESHOLD.count();
+          used_imu_torso_data_.GetAgeMs() <= standing_profile_.imu_freshness_limit_s * 1000.0;
 
       bool body_stable = false;
       standing_body_diagnostics_ = {};
@@ -3312,7 +3338,9 @@ class G1Deploy {
         const auto angular_velocity = used_imu_torso_data_.data->gyroscope();
         standing_body_diagnostics_ = EvaluateStandingBody(
             {quaternion[0], quaternion[1], quaternion[2], quaternion[3]},
-            {angular_velocity[0], angular_velocity[1], angular_velocity[2]});
+            {angular_velocity[0], angular_velocity[1], angular_velocity[2]},
+            standing_profile_.torso_tilt_limit_rad,
+            standing_profile_.torso_angular_velocity_limit_rad_s);
         body_stable = standing_body_diagnostics_.ok;
       }
       const auto step = playback_protocol_.update(
@@ -3321,11 +3349,10 @@ class G1Deploy {
       standing_diagnostics_ = step.standing;
 
       if (step.phase == PlaybackPhase::FAULT) {
-        if (auto* zm = dynamic_cast<ZMQManager*>(input_interface_.get())) {
-          zm->SetPlaybackFrameAdmission(playback_protocol_.active_playback_id(), false);
-        }
+        // FAULT is reserved for an explicit controller-health/emergency path.
+        // Playback outcomes never enter it and therefore never stop WBC.
         CreateDampingCommand();
-        return false;
+        return true;
       }
       // During RETURN_TO_STAND and STABLE_STANDING, preserve the policy
       // command generated from the restored IDLE reference. The protocol
@@ -3334,6 +3361,7 @@ class G1Deploy {
     }
 
     void PopulateStandingDiagnostics(OutputInterface::ControlStatus& status) const {
+      status.standing_evaluated = standing_diagnostics_.evaluated;
       status.standing_active = standing_diagnostics_.active;
       status.standing_elapsed_s = standing_diagnostics_.elapsed_s;
       status.standing_max_joint_velocity =
@@ -3367,7 +3395,8 @@ class G1Deploy {
       playback_protocol_.fault();
       if (playback_id > 0) {
         if (auto* zm = dynamic_cast<ZMQManager*>(input_interface_.get())) {
-          zm->SetPlaybackFrameAdmission(playback_id, false);
+          zm->SetPlaybackFrameAdmission(
+              playback_protocol_.controller_epoch(), playback_id, false);
         }
       }
     }
@@ -4241,8 +4270,7 @@ class G1Deploy {
             return;
           }
           if (!ApplyPlaybackProtocol(operator_state)) {
-            std::cout << "✗ Playback protocol entered FAULT; stopping control system." << std::endl;
-            operator_state.stop = true;
+            std::cout << "✗ Controller health fault; holding resident WBC loop." << std::endl;
           }
           auto motor_command_end_time = std::chrono::steady_clock::now();
 
@@ -4279,6 +4307,33 @@ class G1Deploy {
               cs.control_stopped = operator_state.stop;
               cs.playback_phase = playback_protocol_.phase_name();
               cs.playback_id = playback_protocol_.active_playback_id();
+              cs.protocol_revision = 4;
+              cs.controller_epoch = playback_protocol_.controller_epoch();
+              cs.last_action_outcome = playback_protocol_.action_outcome_name();
+              cs.standing_profile_digest = standing_profile_.digest;
+              switch (playback_protocol_.phase()) {
+                case PlaybackPhase::ACTION:
+                  cs.reference_state = "STREAMED_ACTION";
+                  cs.action_state = "ACTIVE";
+                  cs.standing_state = "UNQUALIFIED";
+                  break;
+                case PlaybackPhase::RETURN_TO_STAND:
+                  cs.reference_state = "IDLE";
+                  cs.action_state = "RECOVERING";
+                  cs.standing_state = "HOLDING";
+                  break;
+                case PlaybackPhase::STABLE_STANDING:
+                  cs.reference_state = "IDLE";
+                  cs.action_state = "NONE";
+                  cs.standing_state = "STABLE";
+                  break;
+                case PlaybackPhase::FAULT:
+                  cs.reference_state = "IDLE";
+                  cs.action_state = "NONE";
+                  cs.standing_state = "UNQUALIFIED";
+                  cs.health_state = "CONTROL_INHIBITED";
+                  break;
+              }
               cs.low_state_age_s = used_low_state_data_.GetAgeMs() / 1000.0;
               cs.imu_age_s = used_imu_torso_data_.GetAgeMs() / 1000.0;
               PopulateStandingDiagnostics(cs);
@@ -4459,6 +4514,7 @@ int main(int argc, char const* argv[]) {
     std::cout << "  --zmq-out-port <port>: ZMQ port for output (default: 5557)" << std::endl;
     std::cout << "  --zmq-out-topic <topic>: ZMQ topic/prefix for output (default: g1_debug)" << std::endl;
     std::cout << "  --emergency-port <port>: loopback emergency-stop request port (default: disabled)" << std::endl;
+    std::cout << "  --standing-profile <path>: versioned standing qualification JSON" << std::endl;
     std::cout << "  --logs-dir <path>: optional logs output base directory (default: logs/<timestamp>/)" << std::endl;
     std::cout << "  --enable-csv-logs: enable writing CSV logs (default: OFF)" << std::endl;
     std::cout << "  --enable-motion-recording: enable motion recording for ZMQ/planner (default: OFF)" << std::endl;
@@ -4510,6 +4566,7 @@ int main(int argc, char const* argv[]) {
   int zmq_out_port = 5557;
   std::string zmq_out_topic = "g1_debug";
   int emergency_port = 0;
+  std::string standing_profile_path = "";
   std::array<double, 3> initial_compliance = {0.5, 0.5, 0.0}; // initial compliance is 0.5 for both hands (keyboard controllable)
   double initial_max_close_ratio = 1.0; // default allows full closure, use --max-close-ratio to limit
   for (int i = 4; i < argc; i++) {
@@ -4618,6 +4675,15 @@ int main(int argc, char const* argv[]) {
       if (i + 1 < argc) { zmq_out_topic = argv[i + 1]; i++; }
     } else if (std::string(argv[i]) == "--emergency-port") {
       if (i + 1 < argc) { emergency_port = std::stoi(argv[i + 1]); i++; }
+    } else if (std::string(argv[i]) == "--standing-profile") {
+      if (i + 1 < argc) {
+        standing_profile_path = argv[i + 1];
+        std::cout << "[INFO] Using standing profile: " << standing_profile_path << std::endl;
+        i++;
+      } else {
+        std::cerr << "Error: --standing-profile requires a path argument" << std::endl;
+        exit(1);
+      }
     } else if (std::string(argv[i]) == "--record-input-file") {
       if (i + 1 < argc) {
         recordInputFile = argv[i + 1];
@@ -4775,7 +4841,8 @@ int main(int argc, char const* argv[]) {
     zmq_out_topic,
     enableMotionRecording,
     initial_compliance,
-    initial_max_close_ratio
+    initial_max_close_ratio,
+    standing_profile_path
   );
   std::cout << "[DEBUG] G1Deploy object created successfully!" << std::endl;
   custom.StartEmergencyStopListener(emergency_port);

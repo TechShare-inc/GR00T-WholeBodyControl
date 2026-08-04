@@ -32,7 +32,7 @@
  * @brief Wire format for the ZMQ "command" topic.
  *
  * Packed binary layout sent by the remote controller:
- *   { start: bool, stop: bool, planner: bool, delta_heading?: f32/f64 }
+ *   { start: bool, stop: bool, planner: bool, action markers, delta_heading?: f32/f64 }
  *
  * Multiple messages between two update() calls are accumulated using OR logic
  * for start/stop (so a transient pulse is never lost), while the planner flag
@@ -45,7 +45,11 @@ struct CommandMessage {
                           ///< false → streamed-motion mode  (use pose topic)
   bool playback_start = false;       ///< Begins a controller-correlated playback.
   bool normal_completion = false;    ///< Requests the controller-owned return-to-stand.
-  bool playback_abort = false;       ///< Abnormally terminates playback into FAULT.
+  bool playback_abort = false;       ///< Legacy marker; protocol v4 uses action_outcome.
+  int32_t protocol_revision = 3;     ///< Coordinated command protocol revision.
+  int32_t action_event = 0;          ///< 0=NONE, 1=START, 2=END.
+  int32_t action_outcome = 0;        ///< 0=NONE, 1=COMPLETED, 2=DIAGNOSTIC_FAILED, 3=CANCELLED, 4=STREAM_FAILED, 5=STAND_RECOVERY_TIMEOUT.
+  int64_t controller_epoch = 1;      ///< Re-hang/re-enable boundary for stale-frame rejection.
   int64_t playback_id = 0;           ///< Correlation ID for playback lifecycle markers.
   int64_t terminal_frame_index = -1; ///< Last frame that must be accepted before return.
   /// Optional absolute heading override (radians).  When set, the value is
@@ -63,8 +67,8 @@ struct CommandMessage {
  * A normal completion is accepted only after the controller has accepted the
  * matching terminal frame. The policy then runs from the restored planner IDLE
  * context for a minimum recovery interval and settling hold. Stale state
- * during the return fails closed into FAULT; stop and emergency paths are
- * outside this protocol and never request a stand.
+ * closes standing qualification while the controller remains alive; stop and
+ * emergency paths are outside this protocol and never request a stand.
  */
 enum class PlaybackPhase {
   ACTION,
@@ -72,6 +76,27 @@ enum class PlaybackPhase {
   STABLE_STANDING,
   FAULT,
 };
+
+enum class ActionOutcome {
+  NONE,
+  COMPLETED,
+  DIAGNOSTIC_FAILED,
+  CANCELLED,
+  STREAM_FAILED,
+  STAND_RECOVERY_TIMEOUT,
+};
+
+inline const char* ActionOutcomeName(ActionOutcome outcome) {
+  switch (outcome) {
+    case ActionOutcome::NONE: return "NONE";
+    case ActionOutcome::COMPLETED: return "COMPLETED";
+    case ActionOutcome::DIAGNOSTIC_FAILED: return "DIAGNOSTIC_FAILED";
+    case ActionOutcome::CANCELLED: return "CANCELLED";
+    case ActionOutcome::STREAM_FAILED: return "STREAM_FAILED";
+    case ActionOutcome::STAND_RECOVERY_TIMEOUT: return "STAND_RECOVERY_TIMEOUT";
+  }
+  return "NONE";
+}
 
 inline const char* PlaybackPhaseName(PlaybackPhase phase) {
   switch (phase) {
@@ -145,6 +170,7 @@ class PlaybackProtocol {
     double stable_hold_required_s = -1.0;
     bool low_state_fresh = false;
     bool imu_fresh = false;
+    bool evaluated = false;
   };
 
   struct StepResult {
@@ -168,7 +194,17 @@ class PlaybackProtocol {
             return_duration_s_ + stable_hold_s_, return_timeout_s)) {}
 
   bool start_action(int64_t playback_id, const JointArray& standing_position) {
+    return start_action(controller_epoch_, playback_id, standing_position);
+  }
+
+  bool start_action(
+      int64_t controller_epoch,
+      int64_t playback_id,
+      const JointArray& standing_position) {
     if (playback_id <= 0) {
+      return false;
+    }
+    if (controller_epoch != controller_epoch_) {
       return false;
     }
     if (phase_ == PlaybackPhase::ACTION && playback_id == active_playback_id_) {
@@ -184,6 +220,7 @@ class PlaybackProtocol {
     settled_reference_position_.reset();
     qualification_reference_pending_ = false;
     initial_qualification_active_ = false;
+    last_action_outcome_ = ActionOutcome::NONE;
     return true;
   }
 
@@ -202,7 +239,19 @@ class PlaybackProtocol {
       int64_t terminal_frame_index,
       int64_t last_accepted_frame_index,
       Clock::time_point now = Clock::now()) {
+    return request_return_to_stand(
+        controller_epoch_, playback_id, terminal_frame_index,
+        last_accepted_frame_index, now);
+  }
+
+  bool request_return_to_stand(
+      int64_t controller_epoch,
+      int64_t playback_id,
+      int64_t terminal_frame_index,
+      int64_t last_accepted_frame_index,
+      Clock::time_point now = Clock::now()) {
     if (phase_ != PlaybackPhase::ACTION || playback_id <= 0 ||
+        controller_epoch != controller_epoch_ ||
         playback_id != active_playback_id_ || terminal_frame_index < 0 ||
         last_accepted_frame_index < terminal_frame_index) {
       return false;
@@ -213,16 +262,49 @@ class PlaybackProtocol {
     qualification_reference_pending_ = false;
     initial_qualification_active_ = false;
     phase_ = PlaybackPhase::RETURN_TO_STAND;
+    last_action_outcome_ = ActionOutcome::COMPLETED;
     return true;
   }
 
   bool abort_action(int64_t playback_id) {
+    return abort_action(controller_epoch_, playback_id, ActionOutcome::CANCELLED);
+  }
+
+  bool abort_action(
+      int64_t controller_epoch,
+      int64_t playback_id,
+      ActionOutcome outcome,
+      Clock::time_point now = Clock::now()) {
     if (phase_ != PlaybackPhase::ACTION || playback_id <= 0 ||
+        controller_epoch != controller_epoch_ ||
         playback_id != active_playback_id_) {
       return false;
     }
-    fault();
+    active_playback_id_ = 0;
+    last_action_outcome_ = outcome;
+    begin_standing_qualification(now);
     return true;
+  }
+
+  bool reinitialize(int64_t controller_epoch, Clock::time_point now = Clock::now()) {
+    if (controller_epoch <= controller_epoch_) {
+      return false;
+    }
+    controller_epoch_ = controller_epoch;
+    active_playback_id_ = 0;
+    last_action_outcome_ = ActionOutcome::NONE;
+    begin_standing_qualification(now);
+    body_stable_previous_ = false;
+    return true;
+  }
+
+  int64_t reinitialize_next_epoch(Clock::time_point now = Clock::now()) {
+    ++controller_epoch_;
+    active_playback_id_ = 0;
+    last_action_outcome_ = ActionOutcome::NONE;
+    begin_standing_qualification(now);
+    body_stable_previous_ = false;
+    return controller_epoch_;
   }
 
   StepResult update(
@@ -233,12 +315,39 @@ class PlaybackProtocol {
       Clock::time_point now = Clock::now(),
       bool body_stable = true) {
     StepResult result;
+    standing_evaluated_ = true;
     result.phase = phase_;
 
-    if (phase_ == PlaybackPhase::STABLE_STANDING &&
-        (!low_state_fresh || !imu_fresh)) {
-      fault();
-      result.phase = phase_;
+    if (phase_ == PlaybackPhase::STABLE_STANDING) {
+      if (body_stable_previous_ && !body_stable) {
+        // A simulator support/re-hang transition is observable first as a
+        // loss of the previously qualified body gate. Treat that edge as a
+        // controller reinitialization boundary so old frames and markers
+        // cannot cross it. A continuously bad body remains in one epoch.
+        result.standing = EvaluateStanding(
+            measured_position, measured_velocity, low_state_fresh, imu_fresh,
+            now, body_stable);
+        result.standing.active = false;
+        ++controller_epoch_;
+        active_playback_id_ = 0;
+        last_action_outcome_ = ActionOutcome::NONE;
+        begin_standing_qualification(now);
+        body_stable_previous_ = false;
+        result.phase = phase_;
+        return result;
+      }
+      body_stable_previous_ = body_stable;
+      result.standing = EvaluateStanding(
+          measured_position, measured_velocity, low_state_fresh, imu_fresh,
+          now, body_stable);
+      result.standing.active = false;
+      const bool stable = low_state_fresh && imu_fresh && body_stable &&
+          result.standing.velocity_ok && result.standing.recovery_ok &&
+          (!result.standing.position_reference_available || result.standing.position_ok);
+      if (!stable) {
+        begin_standing_qualification(now);
+        result.phase = phase_;
+      }
       return result;
     }
 
@@ -253,6 +362,7 @@ class PlaybackProtocol {
       result.standing.low_state_fresh = low_state_fresh;
       result.standing.imu_fresh = imu_fresh;
       result.standing.body_ok = body_stable;
+      result.standing.evaluated = true;
       result.standing.max_abs_joint_velocity = 0.0;
       for (size_t i = 0; i < kJointCount; ++i) {
         result.standing.max_abs_joint_velocity = std::max(
@@ -263,7 +373,9 @@ class PlaybackProtocol {
           result.standing.max_abs_joint_velocity <= velocity_tolerance_;
 
       if (!low_state_fresh || !imu_fresh) {
-        fault();
+        stable_since_.reset();
+        settled_reference_position_.reset();
+        qualification_reference_pending_ = true;
         result.phase = phase_;
         return result;
       }
@@ -301,7 +413,9 @@ class PlaybackProtocol {
 
       const double elapsed = result.standing.elapsed_s;
       if (!initial_qualification_active_ && elapsed >= return_timeout_s_) {
-        fault();
+        active_playback_id_ = 0;
+        last_action_outcome_ = ActionOutcome::STAND_RECOVERY_TIMEOUT;
+        begin_standing_qualification(now);
         result.phase = phase_;
         return result;
       }
@@ -343,9 +457,57 @@ class PlaybackProtocol {
 
   PlaybackPhase phase() const { return phase_; }
   int64_t active_playback_id() const { return active_playback_id_; }
+  int64_t controller_epoch() const { return controller_epoch_; }
+  ActionOutcome last_action_outcome() const { return last_action_outcome_; }
+  bool standing_evaluated() const { return standing_evaluated_; }
   const char* phase_name() const { return PlaybackPhaseName(phase_); }
+  const char* action_outcome_name() const { return ActionOutcomeName(last_action_outcome_); }
 
  private:
+  StandingDiagnostics EvaluateStanding(
+      const JointArray& measured_position,
+      const JointArray& measured_velocity,
+      bool low_state_fresh,
+      bool imu_fresh,
+      Clock::time_point now,
+      bool body_stable) const {
+    StandingDiagnostics result;
+    result.active = true;
+    result.elapsed_s = std::chrono::duration<double>(now - return_started_at_).count();
+    result.velocity_tolerance = velocity_tolerance_;
+    result.recovery_displacement_limit = max_recovery_displacement_;
+    result.position_tolerance = position_tolerance_;
+    result.stable_hold_required_s = stable_hold_s_;
+    result.low_state_fresh = low_state_fresh;
+    result.imu_fresh = imu_fresh;
+    result.body_ok = body_stable;
+    result.evaluated = true;
+    for (size_t i = 0; i < kJointCount; ++i) {
+      result.max_abs_joint_velocity = std::max(
+          result.max_abs_joint_velocity, std::abs(measured_velocity[i]));
+      result.max_recovery_displacement = std::max(
+          result.max_recovery_displacement,
+          std::abs(measured_position[i] - standing_reference_position_[i]));
+    }
+    result.velocity_ok = result.max_abs_joint_velocity <= velocity_tolerance_;
+    result.recovery_ok = result.max_recovery_displacement <= max_recovery_displacement_;
+    result.position_reference_available = settled_reference_position_.has_value();
+    if (settled_reference_position_.has_value()) {
+      result.max_position_drift = 0.0;
+      for (size_t i = 0; i < kJointCount; ++i) {
+        result.max_position_drift = std::max(
+            result.max_position_drift,
+            std::abs(measured_position[i] - (*settled_reference_position_)[i]));
+      }
+      result.position_ok = result.max_position_drift <= position_tolerance_;
+    }
+    if (stable_since_.has_value()) {
+      result.stable_hold_elapsed_s =
+          std::chrono::duration<double>(now - *stable_since_).count();
+    }
+    return result;
+  }
+
   JointArray standing_reference_position_{};
   double return_duration_s_;
   double position_tolerance_;
@@ -354,12 +516,16 @@ class PlaybackProtocol {
   double max_recovery_displacement_;
   double return_timeout_s_;
   int64_t active_playback_id_ = 0;
+  int64_t controller_epoch_ = 1;
+  ActionOutcome last_action_outcome_ = ActionOutcome::NONE;
   PlaybackPhase phase_ = PlaybackPhase::STABLE_STANDING;
   Clock::time_point return_started_at_{};
   std::optional<Clock::time_point> stable_since_;
   std::optional<JointArray> settled_reference_position_;
   bool qualification_reference_pending_ = false;
   bool initial_qualification_active_ = false;
+  bool standing_evaluated_ = false;
+  bool body_stable_previous_ = true;
 };
 
 // ---------------------------------------------------------------------------

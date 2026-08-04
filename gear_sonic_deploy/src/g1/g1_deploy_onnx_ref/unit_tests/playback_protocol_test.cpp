@@ -46,7 +46,7 @@ TEST(PlaybackProtocolTest, DuplicateActiveStartIsIdempotent) {
   EXPECT_EQ(protocol.active_playback_id(), 17);
 }
 
-TEST(PlaybackProtocolTest, MatchingAbortFailsClosed) {
+TEST(PlaybackProtocolTest, MatchingAbortReturnsToQualificationWithoutStoppingWbc) {
   const auto standing = MakeArray(1.0);
   PlaybackProtocol protocol;
 
@@ -54,7 +54,9 @@ TEST(PlaybackProtocolTest, MatchingAbortFailsClosed) {
   EXPECT_FALSE(protocol.abort_action(18));
   EXPECT_EQ(protocol.phase(), PlaybackPhase::ACTION);
   EXPECT_TRUE(protocol.abort_action(17));
-  EXPECT_EQ(protocol.phase(), PlaybackPhase::FAULT);
+  EXPECT_EQ(protocol.phase(), PlaybackPhase::RETURN_TO_STAND);
+  EXPECT_EQ(protocol.active_playback_id(), 0);
+  EXPECT_EQ(protocol.last_action_outcome(), ActionOutcome::CANCELLED);
 }
 
 TEST(PlaybackProtocolTest, InitialStandingMustBeQualifiedBeforeAction) {
@@ -182,7 +184,7 @@ TEST(PlaybackProtocolTest, QuietButTiltedStateIsNotStableStanding) {
       PlaybackPhase::RETURN_TO_STAND);
 }
 
-TEST(PlaybackProtocolTest, UnsettledReturnFaultsAfterDeadline) {
+TEST(PlaybackProtocolTest, UnsettledReturnTimesOutWithoutStoppingWbc) {
   const auto standing = MakeArray(0.0);
   const auto moving_velocity = MakeArray(0.2);
   PlaybackProtocol protocol(3.0, 0.05, 0.1, 0.25, 1.0, 5.0);
@@ -195,10 +197,12 @@ TEST(PlaybackProtocolTest, UnsettledReturnFaultsAfterDeadline) {
       protocol.update(
           standing, moving_velocity, true, true,
           t0 + std::chrono::milliseconds(5100)).phase,
-      PlaybackPhase::FAULT);
+      PlaybackPhase::RETURN_TO_STAND);
+  EXPECT_EQ(protocol.last_action_outcome(), ActionOutcome::STAND_RECOVERY_TIMEOUT);
+  EXPECT_EQ(protocol.active_playback_id(), 0);
 }
 
-TEST(PlaybackProtocolTest, FreshStateIsRequiredAndFaultDoesNotStand) {
+TEST(PlaybackProtocolTest, FreshStateDropsQualificationWithoutStoppingWbc) {
   const auto defaults = MakeArray(0.0);
   const auto measured = MakeArray(1.0);
   PlaybackProtocol protocol(3.0);
@@ -207,9 +211,9 @@ TEST(PlaybackProtocolTest, FreshStateIsRequiredAndFaultDoesNotStand) {
   ASSERT_TRUE(protocol.start_action(3, defaults));
   ASSERT_TRUE(protocol.request_return_to_stand(3, 4, 4, t0));
   const auto result = protocol.update(measured, MakeArray(0.0), false, true, t0 + std::chrono::milliseconds(20));
-  EXPECT_EQ(result.phase, PlaybackPhase::FAULT);
-  EXPECT_EQ(protocol.phase(), PlaybackPhase::FAULT);
-  EXPECT_STREQ(protocol.phase_name(), "FAULT");
+  EXPECT_EQ(result.phase, PlaybackPhase::RETURN_TO_STAND);
+  EXPECT_EQ(protocol.phase(), PlaybackPhase::RETURN_TO_STAND);
+  EXPECT_STREQ(protocol.phase_name(), "RETURN_TO_STAND");
 }
 
 TEST(PlaybackProtocolTest, StableStandingLosesValidityWhenTelemetryTurnsStale) {
@@ -230,6 +234,55 @@ TEST(PlaybackProtocolTest, StableStandingLosesValidityWhenTelemetryTurnsStale) {
 
   const auto stale_low_state = protocol.update(
       defaults, velocities, false, true, t0 + std::chrono::milliseconds(3300));
-  EXPECT_EQ(stale_low_state.phase, PlaybackPhase::FAULT);
-  EXPECT_EQ(protocol.phase(), PlaybackPhase::FAULT);
+  EXPECT_EQ(stale_low_state.phase, PlaybackPhase::RETURN_TO_STAND);
+  EXPECT_EQ(protocol.phase(), PlaybackPhase::RETURN_TO_STAND);
+}
+
+TEST(PlaybackProtocolTest, RejectsFramesFromAnOlderControllerEpoch) {
+  const auto standing = MakeArray(1.0);
+  PlaybackProtocol protocol;
+  const auto t0 = PlaybackProtocol::Clock::time_point{};
+
+  ASSERT_TRUE(protocol.reinitialize(2, t0));
+  EXPECT_FALSE(protocol.start_action(1, 17, standing));
+  protocol.update(standing, MakeArray(0.0), true, true, t0 + std::chrono::seconds(3));
+  protocol.update(standing, MakeArray(0.0), true, true, t0 + std::chrono::milliseconds(3250));
+  EXPECT_TRUE(protocol.start_action(2, 17, standing));
+  EXPECT_EQ(protocol.controller_epoch(), 2);
+}
+
+TEST(PlaybackProtocolTest, TimeoutOutcomeIsNotRewrittenByLaterStability) {
+  const auto standing = MakeArray(0.0);
+  const auto moving_velocity = MakeArray(0.2);
+  PlaybackProtocol protocol(3.0, 0.05, 0.1, 0.25, 1.0, 5.0);
+  const auto t0 = PlaybackProtocol::Clock::time_point{};
+
+  ASSERT_TRUE(protocol.start_action(17, standing));
+  ASSERT_TRUE(protocol.request_return_to_stand(17, 10, 10, t0));
+  EXPECT_EQ(
+      protocol.update(
+          standing, moving_velocity, true, true,
+          t0 + std::chrono::milliseconds(5100)).phase,
+      PlaybackPhase::RETURN_TO_STAND);
+  EXPECT_EQ(protocol.last_action_outcome(), ActionOutcome::STAND_RECOVERY_TIMEOUT);
+  protocol.update(standing, MakeArray(0.0), true, true,
+                  t0 + std::chrono::seconds(9));
+  EXPECT_EQ(protocol.last_action_outcome(), ActionOutcome::STAND_RECOVERY_TIMEOUT);
+}
+
+TEST(PlaybackProtocolTest, BodyGateEdgeStartsANewControllerEpoch) {
+  const auto standing = MakeArray(0.0);
+  const auto quiet = MakeArray(0.0);
+  PlaybackProtocol protocol;
+  const auto t0 = PlaybackProtocol::Clock::time_point{};
+
+  EXPECT_EQ(
+      protocol.update(standing, quiet, true, true, t0, true).phase,
+      PlaybackPhase::STABLE_STANDING);
+  EXPECT_EQ(
+      protocol.update(standing, quiet, true, true,
+                      t0 + std::chrono::milliseconds(20), false).phase,
+      PlaybackPhase::RETURN_TO_STAND);
+  EXPECT_EQ(protocol.controller_epoch(), 2);
+  EXPECT_FALSE(protocol.start_action(1, 17, standing));
 }
