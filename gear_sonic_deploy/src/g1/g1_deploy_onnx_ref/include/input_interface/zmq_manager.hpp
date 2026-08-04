@@ -333,6 +333,12 @@ class ZMQManager : public InputInterface {
                       DataBuffer<MovementState>& movement_state_buffer,
                       std::mutex& current_motion_mutex,
                       bool& report_temperature) override {
+      bool reenable_controller_stream = false;
+      {
+        std::lock_guard<std::mutex> lock(command_mutex_);
+        reenable_controller_stream = controller_reset_reenable_stream_;
+        controller_reset_reenable_stream_ = false;
+      }
       if (!has_planner) {
         std::cerr << "[ZMQCommandManager ERROR] Planner not available in planner mode" << std::endl;
         operator_state.stop = true;
@@ -397,6 +403,9 @@ class ZMQManager : public InputInterface {
       } else {
         // Streamed motion mode: delegate to pose interface
         if (pose_interface_) {
+          if (reenable_controller_stream) {
+            pose_interface_->TriggerZMQToggle();
+          }
           pose_interface_->handle_input(motion_reader, current_motion, current_frame,
                                        operator_state, reinitialize_heading,
                                        heading_state_buffer,
@@ -520,6 +529,21 @@ class ZMQManager : public InputInterface {
 
     void SetPlaybackFrameAdmission(int64_t playback_id, bool admitted) {
       SetPlaybackFrameAdmission(1, playback_id, admitted);
+    }
+
+    /// Clear network playback state at a simulator controller-reset boundary.
+    void RequestControllerReset() {
+      TriggerSafetyReset();
+      if (pose_interface_) {
+        pose_interface_->RequestControllerReset();
+      }
+      std::lock_guard<std::mutex> lock(command_mutex_);
+      controller_reset_reenable_stream_ =
+          active_mode_ == ManagedMode::STREAMED_MOTION;
+      latest_command_.valid = false;
+      pending_playback_start_.reset();
+      pending_playback_abort_.reset();
+      pending_normal_completion_.reset();
     }
 
     bool IsPlaybackFrameAdmitted(int64_t controller_epoch, int64_t playback_id) const {
@@ -1430,6 +1454,7 @@ class ZMQManager : public InputInterface {
     std::optional<PlaybackMarker> pending_playback_start_;
     std::optional<ActionEndMarker> pending_playback_abort_;
     std::optional<ActionEndMarker> pending_normal_completion_;
+    bool controller_reset_reenable_stream_ = false;
     
     std::mutex planner_mutex_;          ///< Guards access to latest_planner_message_.
     PlannerMessage latest_planner_message_;  ///< Most recent planner movement message.

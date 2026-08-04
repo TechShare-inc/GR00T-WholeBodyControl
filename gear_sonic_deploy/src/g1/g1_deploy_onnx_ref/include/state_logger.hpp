@@ -187,6 +187,9 @@ class StateLogger {
   size_t capacity() const;
   size_t size() const;
 
+  /// Drop historical samples so a controller restart cannot reuse old policy history.
+  void Clear();
+
   // Returns copies of the latest n entries (up to available size)
   // If newest_first is true (default), returns [newest, ..., oldest]; otherwise [oldest, ..., newest]
   std::vector<Entry> GetLatest(size_t n, bool newest_first = true) const;

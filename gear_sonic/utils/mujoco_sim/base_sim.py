@@ -25,6 +25,7 @@ from gear_sonic.utils.mujoco_sim.metric_utils import check_contact
 from gear_sonic.utils.mujoco_sim.robot import Robot
 from gear_sonic.utils.mujoco_sim.sim_utils import get_subtree_body_names
 from gear_sonic.utils.mujoco_sim.unitree_sdk2py_bridge import ElasticBand, UnitreeSdk2Bridge
+from gear_sonic.utils.mujoco_sim.simulation_reset import SimulationResetClient
 
 GEAR_SONIC_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -58,6 +59,13 @@ class DefaultEnv:
             }
 
         self.reward_lock = Lock()
+        self._keyboard_reset_lock = Lock()
+        self._keyboard_reset_pending = False
+        self._reset_client = SimulationResetClient(
+            host=self.config.get("SIMULATION_RESET_ZMQ_HOST", "127.0.0.1"),
+            port=self.config.get("SIMULATION_RESET_ZMQ_PORT", 0),
+            timeout_ms=self.config.get("SIMULATION_RESET_TIMEOUT_MS", 1000),
+        )
         self.unitree_bridge = None
         self.onscreen = onscreen
 
@@ -198,7 +206,7 @@ class DefaultEnv:
                 self.viewer = mujoco.viewer.launch_passive(
                     self.mj_model,
                     self.mj_data,
-                    key_callback=self.elastic_band.MujuocoKeyCallback,
+                    key_callback=self.MujuocoKeyCallback,
                     show_left_ui=False,
                     show_right_ui=False,
                 )
@@ -387,6 +395,7 @@ class DefaultEnv:
         return obs
 
     def sim_step(self):
+        self._process_keyboard_reset()
         self.obs = self.prepare_obs()
         self.unitree_bridge.PublishLowState(self.obs)
         if self.unitree_bridge.joystick:
@@ -495,7 +504,9 @@ class DefaultEnv:
         return render_caches
 
     def handle_keyboard_button(self, key):
-        if self.elastic_band:
+        if key == "9":
+            self._queue_keyboard_reset()
+        elif key in ["7", "8"] and self.elastic_band:
             self.elastic_band.handle_keyboard_button(key)
 
         if key == "backspace":
@@ -504,6 +515,47 @@ class DefaultEnv:
             self.update_viewer_camera()
         if key in ["up", "down", "left", "right"]:
             self.apply_perturbation(key)
+
+    def MujuocoKeyCallback(self, key):
+        """Translate viewer keys into simulator-thread work.
+
+        MuJoCo invokes this callback from the viewer thread.  Physics data is
+        therefore never reset here; key 9 is consumed at the start of the
+        simulation thread's next step.
+        """
+        import glfw
+
+        if key == glfw.KEY_7:
+            self.handle_keyboard_button("7")
+        elif key == glfw.KEY_8:
+            self.handle_keyboard_button("8")
+        elif key == glfw.KEY_9:
+            self.handle_keyboard_button("9")
+
+    def _queue_keyboard_reset(self):
+        with self._keyboard_reset_lock:
+            self._keyboard_reset_pending = True
+
+    def _process_keyboard_reset(self):
+        with self._keyboard_reset_lock:
+            if not self._keyboard_reset_pending:
+                return
+            self._keyboard_reset_pending = False
+
+        prepared = self._reset_client.prepare()
+        if not prepared:
+            print(
+                "Warning: WBC reset handshake unavailable; applying local simulator reset",
+                flush=True,
+            )
+
+        if self.elastic_band:
+            self.elastic_band.enable = not self.elastic_band.enable
+            print(f"ElasticBand enable: {self.elastic_band.enable}", flush=True)
+        self.reset()
+
+        if prepared and not self._reset_client.complete():
+            print("Warning: WBC reset restart acknowledgement timed out", flush=True)
 
     def check_fall(self):
         self.fall = False

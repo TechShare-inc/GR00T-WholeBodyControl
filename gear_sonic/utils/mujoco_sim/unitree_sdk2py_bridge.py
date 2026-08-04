@@ -400,18 +400,11 @@ class ElasticBand:
 
         return np.concatenate([f, torque])
 
-    def MujuocoKeyCallback(self, key):
-        import glfw
-
-        if key == glfw.KEY_7:
-            self.length -= 0.1
-        if key == glfw.KEY_8:
-            self.length += 0.1
-        if key == glfw.KEY_9:
-            self.enable = not self.enable
-            print(f"ElasticBand enable: {self.enable}", flush=True)
-
     def handle_keyboard_button(self, key):
+        if key == "7":
+            self.length -= 0.1
+        if key == "8":
+            self.length += 0.1
         if key == "9":
             self.enable = not self.enable
             print(f"ElasticBand enable: {self.enable}", flush=True)

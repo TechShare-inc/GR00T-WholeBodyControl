@@ -66,6 +66,7 @@
 #include <algorithm>
 #include <numeric>
 #include <atomic>
+#include <condition_variable>
 #include <thread>
 
 #include <nlohmann/json.hpp>
@@ -2146,6 +2147,136 @@ class G1Deploy {
     OperatorState operator_state;
 
   private:
+    // The simulator reset is a resident-controller pause, not operator_state.stop:
+    // the process and its real-time threads stay alive while MuJoCo restores qpos/qvel.
+    std::atomic<bool> simulation_reset_listener_running_{false};
+    std::thread simulation_reset_listener_thread_;
+    mutable std::mutex simulation_reset_mutex_;
+    std::condition_variable simulation_reset_cv_;
+    bool simulation_reset_requested_ = false;
+    bool simulation_reset_complete_requested_ = false;
+    bool simulation_reset_transitioning_ = false;
+    bool simulation_reset_holding_ = false;
+    bool simulation_reset_resume_control_ = false;
+    std::string simulation_reset_request_id_;
+    std::string simulation_reset_stage_ = "DISABLED";
+
+    bool IsSimulationResetInProgress() const {
+      std::lock_guard<std::mutex> lock(simulation_reset_mutex_);
+      return simulation_reset_requested_ || simulation_reset_holding_ ||
+          simulation_reset_complete_requested_ || simulation_reset_transitioning_;
+    }
+
+    std::string SimulationResetStage() const {
+      std::lock_guard<std::mutex> lock(simulation_reset_mutex_);
+      return simulation_reset_stage_;
+    }
+
+    /**
+     * Consume a simulator reset request on the control thread.
+     *
+     * Prepare enters a damping-only hold and clears policy/playback history.
+     * Complete is consumed only after the simulator has reset its neutral data;
+     * it then re-enters the same INIT path used at process startup.
+     */
+    void ProcessSimulationReset() {
+      bool begin_reset = false;
+      bool complete_reset = false;
+      {
+        std::lock_guard<std::mutex> lock(simulation_reset_mutex_);
+        if (simulation_reset_requested_ && !simulation_reset_holding_) {
+          simulation_reset_requested_ = false;
+          simulation_reset_transitioning_ = true;
+          simulation_reset_resume_control_ = operator_state.start;
+          simulation_reset_stage_ = "STOPPING";
+          begin_reset = true;
+        }
+        if (simulation_reset_complete_requested_ && simulation_reset_holding_) {
+          simulation_reset_complete_requested_ = false;
+          simulation_reset_transitioning_ = true;
+          simulation_reset_stage_ = "RESETTING";
+          complete_reset = true;
+        }
+      }
+
+      if (begin_reset) {
+        operator_state.play = false;
+        operator_state.start = false;
+        reinitialize_heading_ = true;
+        time_ = 0.0;
+        playback_protocol_.reinitialize_next_epoch();
+        standing_diagnostics_ = {};
+        standing_body_diagnostics_ = {};
+        if (state_logger_) {
+          state_logger_->Clear();
+        }
+        // Reproduce the startup observation boundary.  The policy is
+        // feed-forward, but its observation includes the logger history and
+        // previous actions; retaining either across a MuJoCo reset defeats
+        // the INIT restart below.
+        last_action.fill(0.0);
+        last_left_hand_action.fill(0.0);
+        last_right_hand_action.fill(0.0);
+        std::fill(obs_buffer_.begin(), obs_buffer_.end(), 0.0);
+        std::fill(encoder_obs_buffer_.begin(), encoder_obs_buffer_.end(), 0.0);
+        std::fill(token_state_data_.begin(), token_state_data_.end(), 0.0);
+        first_token_received_ = false;
+        last_token_time_.reset();
+        last_logged_encoder_mode_ = -999;
+        has_vr_3point_data_ = false;
+        has_vr_5point_data_ = false;
+        has_left_hand_data_ = false;
+        has_right_hand_data_ = false;
+        has_upper_body_data_ = false;
+        idle_readapt_original_targets_.fill(0.0);
+        idle_readapt_stored_ = false;
+        idle_readapt_state_ = IdleReadaptState::IDLE;
+        last_movement_state_ = MovementState(
+            static_cast<int>(LocomotionMode::IDLE), {0.0f, 0.0f, 0.0f},
+            {1.0f, 0.0f, 0.0f}, -1.0f, -1.0f);
+        replan_interval_counter_ = 0.0f;
+        saved_frame_for_observation_window_ = 0;
+        {
+          std::lock_guard<std::mutex> lock(current_motion_mutex_);
+          current_frame_ = 0;
+        }
+        if (auto* zm = dynamic_cast<ZMQManager*>(input_interface_.get())) {
+          zm->RequestControllerReset();
+        } else if (input_interface_) {
+          input_interface_->TriggerSafetyReset();
+        }
+        if (planner_) {
+          planner_->planner_state_.enabled = false;
+          planner_->planner_state_.initialized = false;
+        }
+        CreateDampingCommand();
+        {
+          std::lock_guard<std::mutex> lock(simulation_reset_mutex_);
+          simulation_reset_transitioning_ = false;
+          simulation_reset_holding_ = true;
+          simulation_reset_stage_ = "WBC_HOLDING";
+        }
+        simulation_reset_cv_.notify_all();
+        std::cout << "[SimulationReset] WBC stopped; waiting for neutral MuJoCo reset" << std::endl;
+      }
+
+      if (complete_reset) {
+        program_state_ = ProgramState::INIT;
+        operator_state.start = simulation_reset_resume_control_;
+        operator_state.play = false;
+        reinitialize_heading_ = true;
+        {
+          std::lock_guard<std::mutex> lock(simulation_reset_mutex_);
+          simulation_reset_transitioning_ = false;
+          simulation_reset_holding_ = false;
+          simulation_reset_stage_ = "RESTARTING";
+        }
+        simulation_reset_cv_.notify_all();
+        std::cout << "[SimulationReset] neutral reset acknowledged; WBC INIT restarted" << std::endl;
+      }
+    }
+
+  public:
     std::atomic<bool> emergency_listener_running_{false};
     std::thread emergency_listener_thread_;
 
@@ -2190,6 +2321,109 @@ class G1Deploy {
     void StopEmergencyStopListener() {
       emergency_listener_running_.store(false);
       if (emergency_listener_thread_.joinable()) { emergency_listener_thread_.join(); }
+    }
+
+    void StartSimulationResetListener(int port) {
+      if (port <= 0) {
+        return;
+      }
+      {
+        std::lock_guard<std::mutex> lock(simulation_reset_mutex_);
+        simulation_reset_stage_ = "IDLE";
+      }
+      simulation_reset_listener_running_.store(true);
+      simulation_reset_listener_thread_ = std::thread([this, port]() {
+        try {
+          zmq::context_t context(1);
+          zmq::socket_t socket(context, zmq::socket_type::rep);
+          socket.set(zmq::sockopt::linger, 0);
+          socket.set(zmq::sockopt::rcvtimeo, 100);
+          socket.bind("tcp://127.0.0.1:" + std::to_string(port));
+          std::cout << "[SimulationReset] Listening on loopback port " << port << std::endl;
+          while (simulation_reset_listener_running_.load()) {
+            zmq::message_t request;
+            const auto received = socket.recv(request, zmq::recv_flags::none);
+            if (!received) {
+              continue;
+            }
+
+            nlohmann::json response = {{"status", "rejected"}};
+            try {
+              const auto command = nlohmann::json::parse(request.to_string());
+              const auto request_id = command.value("request_id", "");
+              const auto operation = command.value("command", "");
+              if (command.value("version", 0) != 1 || request_id.empty()) {
+                response["error"] = "invalid request";
+              } else if (operation == "simulation_reset_prepare") {
+                std::unique_lock<std::mutex> lock(simulation_reset_mutex_);
+                if (simulation_reset_requested_ || simulation_reset_holding_ ||
+                    simulation_reset_transitioning_) {
+                  response["error"] = "reset already in progress";
+                } else {
+                  simulation_reset_request_id_ = request_id;
+                  simulation_reset_requested_ = true;
+                  simulation_reset_stage_ = "REQUESTED";
+                  lock.unlock();
+                  simulation_reset_cv_.notify_all();
+                  lock.lock();
+                  const bool held = simulation_reset_cv_.wait_for(
+                      lock, std::chrono::seconds(2), [this]() {
+                        return simulation_reset_holding_ ||
+                            !simulation_reset_listener_running_.load();
+                      });
+                  if (held && simulation_reset_holding_) {
+                    response = {
+                        {"status", "accepted"},
+                        {"stage", "WBC_HOLDING"},
+                    };
+                  } else {
+                    response["error"] = "WBC reset hold timed out";
+                  }
+                }
+              } else if (operation == "simulation_reset_complete") {
+                std::unique_lock<std::mutex> lock(simulation_reset_mutex_);
+                if (!simulation_reset_holding_ || request_id != simulation_reset_request_id_) {
+                  response["error"] = "no matching reset hold";
+                } else {
+                  simulation_reset_complete_requested_ = true;
+                  simulation_reset_stage_ = "RESTART_REQUESTED";
+                  lock.unlock();
+                  simulation_reset_cv_.notify_all();
+                  lock.lock();
+                  const bool restarted = simulation_reset_cv_.wait_for(
+                      lock, std::chrono::seconds(2), [this]() {
+                        return simulation_reset_stage_ == "RESTARTING" ||
+                            !simulation_reset_listener_running_.load();
+                      });
+                  if (restarted && simulation_reset_stage_ == "RESTARTING") {
+                    response = {
+                        {"status", "accepted"},
+                        {"stage", "RESTARTING"},
+                    };
+                  } else {
+                    response["error"] = "WBC restart acknowledgement timed out";
+                  }
+                }
+              } else {
+                response["error"] = "unknown command";
+              }
+            } catch (const nlohmann::json::exception&) {
+              response["error"] = "invalid request";
+            }
+            socket.send(zmq::buffer(response.dump()), zmq::send_flags::none);
+          }
+        } catch (const zmq::error_t& error) {
+          std::cerr << "[SimulationReset] Listener failed: " << error.what() << std::endl;
+        }
+      });
+    }
+
+    void StopSimulationResetListener() {
+      simulation_reset_listener_running_.store(false);
+      simulation_reset_cv_.notify_all();
+      if (simulation_reset_listener_thread_.joinable()) {
+        simulation_reset_listener_thread_.join();
+      }
     }
 
     G1Deploy(
@@ -2670,6 +2904,7 @@ class G1Deploy {
     ~G1Deploy()
     {
       StopEmergencyStopListener();
+      StopSimulationResetListener();
       // CUDA resources are now cleaned up by the PolicyEngine and planner classes automatically
     }
 
@@ -2763,6 +2998,7 @@ class G1Deploy {
     void Stop() {
       operator_state.stop = true;
       StopEmergencyStopListener();
+      StopSimulationResetListener();
 
       if (control_thread_ptr_) {
         input_thread_ptr_->Wait();
@@ -3724,7 +3960,7 @@ class G1Deploy {
      * 4. Optionally records / plays back input state for offline replay.
      */
     void Input() {
-      if (operator_state.stop) { return; }
+      if (operator_state.stop || IsSimulationResetInProgress()) { return; }
       
       // Update input interface (poll for new data)
       input_interface_->update();
@@ -3872,7 +4108,7 @@ class G1Deploy {
      * and picked up by CurrentFrameAdvancement() in the control thread.
      */
     void Planner() {
-      if (operator_state.stop) { return; }
+      if (operator_state.stop || IsSimulationResetInProgress()) { return; }
       auto low_state_data = low_state_buffer_.GetDataWithTime();
       const std::shared_ptr<const LowState_> ls = low_state_data.data;
       
@@ -4111,6 +4347,11 @@ class G1Deploy {
      *    10. Periodic timing log every 50 ticks (~1 s).
      */
     void Control() {
+      ProcessSimulationReset();
+      if (IsSimulationResetInProgress()) {
+        CreateDampingCommand();
+        return;
+      }
       if (operator_state.stop) { return; }
 
       switch (program_state_) {
@@ -4318,6 +4559,7 @@ class G1Deploy {
               cs.protocol_revision = 4;
               cs.controller_epoch = playback_protocol_.controller_epoch();
               cs.last_action_outcome = playback_protocol_.action_outcome_name();
+              cs.simulation_reset_stage = SimulationResetStage();
               cs.standing_profile_digest = standing_profile_.digest;
               switch (playback_protocol_.phase()) {
                 case PlaybackPhase::ACTION:
@@ -4524,6 +4766,7 @@ int main(int argc, char const* argv[]) {
     std::cout << "  --zmq-out-port <port>: ZMQ port for output (default: 5557)" << std::endl;
     std::cout << "  --zmq-out-topic <topic>: ZMQ topic/prefix for output (default: g1_debug)" << std::endl;
     std::cout << "  --emergency-port <port>: loopback emergency-stop request port (default: disabled)" << std::endl;
+    std::cout << "  --simulation-reset-port <port>: loopback MuJoCo reset handshake (sim only; default: disabled)" << std::endl;
     std::cout << "  --standing-profile <path>: versioned standing qualification JSON" << std::endl;
     std::cout << "  --logs-dir <path>: optional logs output base directory (default: logs/<timestamp>/)" << std::endl;
     std::cout << "  --enable-csv-logs: enable writing CSV logs (default: OFF)" << std::endl;
@@ -4576,6 +4819,7 @@ int main(int argc, char const* argv[]) {
   int zmq_out_port = 5557;
   std::string zmq_out_topic = "g1_debug";
   int emergency_port = 0;
+  int simulation_reset_port = 0;
   std::string standing_profile_path = "";
   std::array<double, 3> initial_compliance = {0.5, 0.5, 0.0}; // initial compliance is 0.5 for both hands (keyboard controllable)
   double initial_max_close_ratio = 1.0; // default allows full closure, use --max-close-ratio to limit
@@ -4685,6 +4929,8 @@ int main(int argc, char const* argv[]) {
       if (i + 1 < argc) { zmq_out_topic = argv[i + 1]; i++; }
     } else if (std::string(argv[i]) == "--emergency-port") {
       if (i + 1 < argc) { emergency_port = std::stoi(argv[i + 1]); i++; }
+    } else if (std::string(argv[i]) == "--simulation-reset-port") {
+      if (i + 1 < argc) { simulation_reset_port = std::stoi(argv[i + 1]); i++; }
     } else if (std::string(argv[i]) == "--standing-profile") {
       if (i + 1 < argc) {
         standing_profile_path = argv[i + 1];
@@ -4856,6 +5102,7 @@ int main(int argc, char const* argv[]) {
   );
   std::cout << "[DEBUG] G1Deploy object created successfully!" << std::endl;
   custom.StartEmergencyStopListener(emergency_port);
+  custom.StartSimulationResetListener(simulation_reset_port);
   
   // Main application loop - check both operator_state.stop and ROS2 status if using ROS2
 #if HAS_ROS2

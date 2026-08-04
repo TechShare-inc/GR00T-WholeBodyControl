@@ -62,6 +62,31 @@ class _SlowViewerEnv:
 
 
 class BaseSimulatorSchedulingTest(unittest.TestCase):
+    def test_keyboard_reset_orders_wbc_hold_neutral_reset_and_restart(self):
+        events = []
+
+        class _ResetClient:
+            def prepare(self):
+                events.append("wbc-stop")
+                return True
+
+            def complete(self):
+                events.append("wbc-start")
+                return True
+
+        env = base_sim.DefaultEnv.__new__(base_sim.DefaultEnv)
+        env.elastic_band = SimpleNamespace(enable=True)
+        env._reset_client = _ResetClient()
+        env._keyboard_reset_lock = base_sim.Lock()
+        env._keyboard_reset_pending = False
+        env.reset = lambda: events.append("neutral-reset")
+
+        env.handle_keyboard_button("9")
+        env._process_keyboard_reset()
+
+        self.assertEqual(events, ["wbc-stop", "neutral-reset", "wbc-start"])
+        self.assertFalse(env.elastic_band.enable)
+
     def test_slow_viewer_does_not_starve_state_synchronization(self):
         clock = _Clock()
         env = _SlowViewerEnv(clock)

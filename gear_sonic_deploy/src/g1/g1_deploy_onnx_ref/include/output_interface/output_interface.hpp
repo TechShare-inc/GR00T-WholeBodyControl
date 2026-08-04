@@ -135,6 +135,7 @@ public:
       std::string standing_state = "STABLE";
       std::string health_state = "HEALTHY";
       std::string last_action_outcome = "NONE";
+      std::string simulation_reset_stage = "DISABLED";
       std::string standing_profile_digest;
       bool standing_evaluated = false;
       uint64_t heartbeat_sequence = 0;

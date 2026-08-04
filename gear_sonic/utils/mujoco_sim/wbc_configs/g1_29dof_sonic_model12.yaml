@@ -8,6 +8,12 @@ DOMAIN_ID: 0 # Domain id
 # INTERFACE: "enxe8ea6a9c4e09"
 # INTERFACE: "enxc8a3623c9cb7"
 INTERFACE: "lo"
+
+# Loopback-only control handshake used by the MuJoCo viewer's key 9 reset.
+# The C++ listener is enabled only for a simulation WBC deployment.
+SIMULATION_RESET_ZMQ_HOST: "127.0.0.1"
+SIMULATION_RESET_ZMQ_PORT: 5561
+SIMULATION_RESET_TIMEOUT_MS: 1000
 SIMULATOR: "mujoco"  # "robocasa"
 
 USE_JOYSTICK: 0 # Simulate Unitree WirelessController using a gamepad (0: disable, 1: enable)
