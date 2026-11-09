@@ -204,17 +204,23 @@ public:
      * Throttled to CONTROL_STATUS_INTERVAL_SEC.  Serialises ControlStatus fields
      * into a msgpack map and sends it as a non-blocking ZMQ message.
      */
-    void publish_control_status(const OutputInterface::ControlStatus& status) override {
-        auto now = std::chrono::steady_clock::now();
-        double elapsed = std::chrono::duration<double>(now - control_status_last_publish_time_).count();
-        if (elapsed < CONTROL_STATUS_INTERVAL_SEC && status.playback_phase != "FAULT") {
-            return;
-        }
-        control_status_last_publish_time_ = now;
+    /// Number of key/value pairs in every control_status heartbeat.
+    static constexpr uint32_t kControlStatusFieldCount = 47;
 
-        msgpack::sbuffer sbuf;
+    /**
+     * @brief Serialise one control_status heartbeat as a msgpack map.
+     *
+     * ``source_monotonic_s`` is the controller's steady-clock time when the
+     * heartbeat was built, so the pipeline can report controller-side
+     * timing separately from its own receive time.
+     */
+    static void PackControlStatus(
+        const OutputInterface::ControlStatus& status,
+        uint64_t sequence,
+        double source_monotonic_s,
+        msgpack::sbuffer& sbuf) {
         msgpack::packer<msgpack::sbuffer> pk(&sbuf);
-        pk.pack_map(46);
+        pk.pack_map(kControlStatusFieldCount);
         pk.pack("instance_id");     pk.pack(status.instance_id);
         pk.pack("control_started"); pk.pack(status.control_started);
         pk.pack("control_stopped"); pk.pack(status.control_stopped);
@@ -238,7 +244,7 @@ public:
         pk.pack("simulation_reset_stage"); pk.pack(status.simulation_reset_stage);
         pk.pack("standing_profile_digest"); pk.pack(status.standing_profile_digest);
         pk.pack("standing_evaluated"); pk.pack(status.standing_evaluated);
-        pk.pack("heartbeat_sequence"); pk.pack(++control_status_sequence_);
+        pk.pack("heartbeat_sequence"); pk.pack(sequence);
         pk.pack("standing_active"); pk.pack(status.standing_active);
         pk.pack("standing_elapsed_s"); pk.pack(status.standing_elapsed_s);
         pk.pack("standing_max_joint_velocity"); pk.pack(status.standing_max_joint_velocity);
@@ -268,6 +274,23 @@ public:
         pk.pack(status.standing_max_torso_angular_velocity);
         pk.pack("standing_torso_angular_velocity_limit");
         pk.pack(status.standing_torso_angular_velocity_limit);
+        pk.pack("source_monotonic_s"); pk.pack(source_monotonic_s);
+    }
+
+    void publish_control_status(const OutputInterface::ControlStatus& status) override {
+        auto now = std::chrono::steady_clock::now();
+        double elapsed = std::chrono::duration<double>(now - control_status_last_publish_time_).count();
+        if (elapsed < CONTROL_STATUS_INTERVAL_SEC && status.playback_phase != "FAULT") {
+            return;
+        }
+        control_status_last_publish_time_ = now;
+
+        msgpack::sbuffer sbuf;
+        PackControlStatus(
+            status,
+            ++control_status_sequence_,
+            std::chrono::duration<double>(now.time_since_epoch()).count(),
+            sbuf);
         send_zmq_message(control_status_topic_, sbuf);
     }
 
