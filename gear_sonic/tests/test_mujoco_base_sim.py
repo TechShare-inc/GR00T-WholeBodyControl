@@ -1,7 +1,7 @@
 """Regression tests for onscreen simulation scheduling and fall recovery."""
 
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from gear_sonic.utils.mujoco_sim import base_sim

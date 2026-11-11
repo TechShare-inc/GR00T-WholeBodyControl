@@ -14,7 +14,9 @@ import scipy.spatial.transform
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber
 from unitree_sdk2py.idl.default import (
     unitree_go_msg_dds__WirelessController_,
-    unitree_hg_msg_dds__HandCmd_ as HandCmd_default,
+)
+from unitree_sdk2py.idl.default import unitree_hg_msg_dds__HandCmd_ as HandCmd_default
+from unitree_sdk2py.idl.default import (
     unitree_hg_msg_dds__HandState_ as HandState_default,
 )
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import WirelessController_
@@ -37,20 +39,36 @@ class UnitreeSdk2Bridge:
         if "g1" in robot_type or "h1-2" in robot_type:
             from unitree_sdk2py.idl.default import (
                 unitree_hg_msg_dds__IMUState_ as IMUState_default,
-                unitree_hg_msg_dds__LowCmd_,
+            )
+            from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_
+            from unitree_sdk2py.idl.default import (
                 unitree_hg_msg_dds__LowState_ as LowState_default,
+            )
+            from unitree_sdk2py.idl.default import (
                 unitree_hg_msg_dds__OdoState_ as OdoState_default,
             )
-            from unitree_sdk2py.idl.unitree_hg.msg.dds_ import IMUState_, LowCmd_, LowState_
+            from unitree_sdk2py.idl.unitree_hg.msg.dds_ import (
+                IMUState_,
+                LowCmd_,
+                LowState_,
+            )
 
             self.low_cmd = unitree_hg_msg_dds__LowCmd_()
         elif "h1" == robot_type or "go2" == robot_type:
             from unitree_sdk2py.idl.default import (
                 unitree_go_msg_dds__LowCmd_,
+            )
+            from unitree_sdk2py.idl.default import (
                 unitree_go_msg_dds__LowState_ as LowState_default,
+            )
+            from unitree_sdk2py.idl.default import (
                 unitree_hg_msg_dds__IMUState_ as IMUState_default,
             )
-            from unitree_sdk2py.idl.unitree_go.msg.dds_ import IMUState_, LowCmd_, LowState_
+            from unitree_sdk2py.idl.unitree_go.msg.dds_ import (
+                IMUState_,
+                LowCmd_,
+                LowState_,
+            )
 
             self.low_cmd = unitree_go_msg_dds__LowCmd_()
         else:
@@ -296,36 +314,77 @@ class UnitreeSdk2Bridge:
         if js_type == "xbox":
             if sys.platform.startswith("linux"):
                 self.axis_id = {
-                    "LX": 0, "LY": 1, "RX": 3, "RY": 4,
-                    "LT": 2, "RT": 5, "DX": 6, "DY": 7,
+                    "LX": 0,
+                    "LY": 1,
+                    "RX": 3,
+                    "RY": 4,
+                    "LT": 2,
+                    "RT": 5,
+                    "DX": 6,
+                    "DY": 7,
                 }
                 self.button_id = {
-                    "X": 2, "Y": 3, "B": 1, "A": 0,
-                    "LB": 4, "RB": 5, "SELECT": 6, "START": 7,
-                    "XBOX": 8, "LSB": 9, "RSB": 10,
+                    "X": 2,
+                    "Y": 3,
+                    "B": 1,
+                    "A": 0,
+                    "LB": 4,
+                    "RB": 5,
+                    "SELECT": 6,
+                    "START": 7,
+                    "XBOX": 8,
+                    "LSB": 9,
+                    "RSB": 10,
                 }
             elif sys.platform == "darwin":
                 self.axis_id = {
-                    "LX": 0, "LY": 1, "RX": 2, "RY": 3,
-                    "LT": 4, "RT": 5,
+                    "LX": 0,
+                    "LY": 1,
+                    "RX": 2,
+                    "RY": 3,
+                    "LT": 4,
+                    "RT": 5,
                 }
                 self.button_id = {
-                    "X": 2, "Y": 3, "B": 1, "A": 0,
-                    "LB": 9, "RB": 10, "SELECT": 4, "START": 6,
-                    "XBOX": 5, "LSB": 7, "RSB": 8,
-                    "DYU": 11, "DYD": 12, "DXL": 13, "DXR": 14,
+                    "X": 2,
+                    "Y": 3,
+                    "B": 1,
+                    "A": 0,
+                    "LB": 9,
+                    "RB": 10,
+                    "SELECT": 4,
+                    "START": 6,
+                    "XBOX": 5,
+                    "LSB": 7,
+                    "RSB": 8,
+                    "DYU": 11,
+                    "DYD": 12,
+                    "DXL": 13,
+                    "DXR": 14,
                 }
             else:
                 print("Unsupported OS. ")
 
         elif js_type == "switch":
             self.axis_id = {
-                "LX": 0, "LY": 1, "RX": 2, "RY": 3,
-                "LT": 5, "RT": 4, "DX": 6, "DY": 7,
+                "LX": 0,
+                "LY": 1,
+                "RX": 2,
+                "RY": 3,
+                "LT": 5,
+                "RT": 4,
+                "DX": 6,
+                "DY": 7,
             }
             self.button_id = {
-                "X": 3, "Y": 4, "B": 1, "A": 0,
-                "LB": 6, "RB": 7, "SELECT": 10, "START": 11,
+                "X": 3,
+                "Y": 4,
+                "B": 1,
+                "A": 0,
+                "LB": 6,
+                "RB": 7,
+                "SELECT": 10,
+                "START": 11,
             }
         else:
             print("Unsupported gamepad. ")

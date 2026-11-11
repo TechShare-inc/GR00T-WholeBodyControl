@@ -7,13 +7,13 @@ BaseSimulator wraps DefaultEnv with rate-limiting and viewer/image update loops.
 
 import os
 import pathlib
-from pathlib import Path
 import pickle
 import tempfile
-from threading import Lock, Thread
 import time
-from typing import Dict
 import xml.etree.ElementTree as ET
+from pathlib import Path
+from threading import Lock, Thread
+from typing import Dict
 
 import mujoco
 import mujoco.viewer
@@ -22,10 +22,13 @@ from scipy.spatial.transform import Rotation
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 
 from gear_sonic.utils.mujoco_sim.metric_utils import check_contact, check_height
-from gear_sonic.utils.mujoco_sim.sim_utils import get_subtree_body_names
-from gear_sonic.utils.mujoco_sim.unitree_sdk2py_bridge import ElasticBand, UnitreeSdk2Bridge
 from gear_sonic.utils.mujoco_sim.robot import Robot
+from gear_sonic.utils.mujoco_sim.sim_utils import get_subtree_body_names
 from gear_sonic.utils.mujoco_sim.simulation_reset import SimulationResetClient
+from gear_sonic.utils.mujoco_sim.unitree_sdk2py_bridge import (
+    ElasticBand,
+    UnitreeSdk2Bridge,
+)
 
 GEAR_SONIC_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -686,9 +689,7 @@ class BaseSimulator:
                 image_due = False
                 steps = 0
                 while (
-                    self._running
-                    and time.monotonic() >= next_step_at
-                    and steps < max_catchup_steps
+                    self._running and time.monotonic() >= next_step_at and steps < max_catchup_steps
                 ):
                     self.sim_env.sim_step()
                     now = time.time()
