@@ -2476,7 +2476,8 @@ class G1Deploy {
       std::array<double, 3> initial_compliance = {0.05, 0.05, 0.0},
       double initial_max_close_ratio = 1.0,
       MotorGainScaleConfig motor_gain_scales = {},
-      std::string standing_profile_path = "")
+      std::string standing_profile_path = "",
+      int dds_domain = 0)
       : time_(0.0),
         publish_dt_(0.002),
         control_dt_(0.02),
@@ -2523,10 +2524,10 @@ class G1Deploy {
       }
       
       // Initialize ChannelFactory
-      ChannelFactory::Instance()->Init(0, networkInterface);
+      ChannelFactory::Instance()->Init(dds_domain, networkInterface);
 
       // Initialize Dex3 hands (ChannelFactory already initialized above)
-      dex3_hands_.initialize("");
+      dex3_hands_.initialize("", dds_domain);
 
       audio_thread_ = std::make_unique<AudioThread>();
 
@@ -4820,6 +4821,7 @@ int main(int argc, char const* argv[]) {
     std::cout << "  --zmq-out-topic <topic>: ZMQ topic/prefix for output (default: g1_debug)" << std::endl;
     std::cout << "  --emergency-port <port>: loopback emergency-stop request port (default: disabled)" << std::endl;
     std::cout << "  --simulation-reset-port <port>: loopback MuJoCo reset handshake (sim only; default: disabled)" << std::endl;
+    std::cout << "  --dds-domain <n>: DDS domain id, 0-232 (default: 0)" << std::endl;
     std::cout << "  --standing-profile <path>: versioned standing qualification JSON" << std::endl;
     std::cout << "  --logs-dir <path>: optional logs output base directory (default: logs/<timestamp>/)" << std::endl;
     std::cout << "  --enable-csv-logs: enable writing CSV logs (default: OFF)" << std::endl;
@@ -4877,6 +4879,7 @@ int main(int argc, char const* argv[]) {
   std::array<double, 3> initial_compliance = {0.5, 0.5, 0.0}; // initial compliance is 0.5 for both hands (keyboard controllable)
   double initial_max_close_ratio = 1.0; // default allows full closure, use --max-close-ratio to limit
   MotorGainScaleConfig motor_gain_scales;
+  int ddsDomain = 0;
   for (int i = 4; i < argc; i++) {
     if (std::string(argv[i]) == "--disable-crc-check") {
       disableCrcCheck = true;
@@ -5052,6 +5055,21 @@ int main(int argc, char const* argv[]) {
       if (!parse_motor_gain_scale_flag(argc, argv, i, motor_gain_scales.kd)) {
         return 1;
       }
+    } else if (std::string(argv[i]) == "--dds-domain") {
+      if (i + 1 >= argc) {
+        std::cerr << "Error: --dds-domain requires a value argument" << std::endl;
+        return 1;
+      }
+      try {
+        ddsDomain = std::stoi(argv[++i]);
+      } catch (...) {
+        ddsDomain = -1;
+      }
+      if (ddsDomain < 0 || ddsDomain > 232) {
+        std::cerr << "Error: --dds-domain must be an integer in [0, 232]" << std::endl;
+        return 1;
+      }
+      std::cout << "[INFO] DDS domain: " << ddsDomain << std::endl;
     } else if (std::string(argv[i]) == "--enable-csv-logs") {
       enableCsvLogs = true;
       std::cout << "[INFO] CSV logging enabled" << std::endl;
@@ -5163,7 +5181,8 @@ int main(int argc, char const* argv[]) {
     initial_compliance,
     initial_max_close_ratio,
     motor_gain_scales,
-    standing_profile_path
+    standing_profile_path,
+    ddsDomain
   );
   std::cout << "[DEBUG] G1Deploy object created successfully!" << std::endl;
   custom.StartEmergencyStopListener(emergency_port);

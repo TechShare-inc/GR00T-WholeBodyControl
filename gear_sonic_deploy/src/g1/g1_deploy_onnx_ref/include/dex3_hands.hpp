@@ -64,11 +64,11 @@ public:
     Dex3Hands() = default;
 
     // Initializes channels for both hands. If networkInterface is empty, skips ChannelFactory init.
-    void initialize(const std::string &networkInterface)
+    void initialize(const std::string &networkInterface, int ddsDomain = 0)
     {
         if (!networkInterface.empty())
         {
-            unitree::robot::ChannelFactory::Instance()->Init(0, networkInterface.c_str());
+            unitree::robot::ChannelFactory::Instance()->Init(ddsDomain, networkInterface.c_str());
         }
 
         // Left hand namespaces
