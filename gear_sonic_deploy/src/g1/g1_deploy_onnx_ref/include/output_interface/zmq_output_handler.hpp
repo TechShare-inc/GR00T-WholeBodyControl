@@ -342,7 +342,7 @@ private:
     std::chrono::steady_clock::time_point config_last_publish_time_;
 
     // -- Control status heartbeat --
-    static constexpr double CONTROL_STATUS_INTERVAL_SEC = 0.5;  ///< ~2 Hz
+    static constexpr double CONTROL_STATUS_INTERVAL_SEC = 0.1;  ///< ~10 Hz, fast enough to catch a 0.1 s gate violation
     std::chrono::steady_clock::time_point control_status_last_publish_time_;
     uint64_t control_status_sequence_ = 0;
 

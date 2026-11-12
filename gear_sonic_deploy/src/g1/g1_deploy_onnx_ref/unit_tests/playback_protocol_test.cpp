@@ -346,3 +346,141 @@ TEST(PlaybackProtocolTest, BodyGateEdgeStartsANewControllerEpoch) {
   EXPECT_EQ(protocol.controller_epoch(), 2);
   EXPECT_FALSE(protocol.start_action(1, 17, standing));
 }
+
+// Issue #32: the drift reference is captured after a settle window, then stays fixed.
+namespace {
+
+constexpr double kSettleS = 1.5;
+
+// Reaches STABLE_STANDING after startup qualification with a settle window; returns the
+// time it got there. The robot is quiet and at `pose` from t0.
+PlaybackProtocol::Clock::time_point Qualify(
+    PlaybackProtocol& protocol,
+    const PlaybackProtocol::JointArray& pose,
+    PlaybackProtocol::Clock::time_point t0) {
+  protocol.begin_standing_qualification(t0);
+  const auto quiet = MakeArray(0.0);
+  for (int ms = 0; ms <= 10000; ms += 20) {
+    const auto now = t0 + std::chrono::milliseconds(ms);
+    if (protocol.update(pose, quiet, true, true, now).phase ==
+        PlaybackPhase::STABLE_STANDING) {
+      return now;
+    }
+  }
+  return t0;
+}
+
+}  // namespace
+
+TEST(PlaybackProtocolTest, DriftReferenceWaitsForTheSettleWindow) {
+  PlaybackProtocol protocol(3.0, 0.05, 0.1, 0.25, 1.0, 10.0, 0.1, kSettleS);
+  const auto t0 = PlaybackProtocol::Clock::time_point{};
+  const auto quiet = MakeArray(0.0);
+  const auto moving = MakeArray(0.5);
+  protocol.begin_standing_qualification(t0);
+
+  // Moving until 4 s: the 3 s minimum is over, but nothing is quiet yet.
+  for (int ms = 0; ms < 4000; ms += 20) {
+    protocol.update(MakeArray(0.0), moving, true, true, t0 + std::chrono::milliseconds(ms));
+  }
+  // Quiet from 4 s: the reference must not be taken before 4 s + 1.5 s.
+  PlaybackPhase phase = PlaybackPhase::RETURN_TO_STAND;
+  bool reference_before_settled = false;
+  for (int ms = 4000; ms < 5500; ms += 20) {
+    const auto step = protocol.update(
+        MakeArray(0.0), quiet, true, true, t0 + std::chrono::milliseconds(ms));
+    reference_before_settled |= step.standing.position_reference_available;
+    phase = step.phase;
+  }
+  EXPECT_FALSE(reference_before_settled);
+  EXPECT_EQ(phase, PlaybackPhase::RETURN_TO_STAND);
+
+  PlaybackProtocol::StepResult last;
+  for (int ms = 5500; ms < 6000; ms += 20) {
+    last = protocol.update(
+        MakeArray(0.0), quiet, true, true, t0 + std::chrono::milliseconds(ms));
+  }
+  EXPECT_EQ(last.phase, PlaybackPhase::STABLE_STANDING);
+}
+
+TEST(PlaybackProtocolTest, DriftPastToleranceStillRestartsQualification) {
+  PlaybackProtocol protocol(3.0, 0.05, 0.1, 0.25, 1.0, 10.0, 0.1, kSettleS);
+  const auto t0 = PlaybackProtocol::Clock::time_point{};
+  const auto quiet = MakeArray(0.0);
+  const auto stood = Qualify(protocol, MakeArray(0.0), t0);
+  ASSERT_EQ(protocol.phase(), PlaybackPhase::STABLE_STANDING);
+
+  // 0.04 rad from the reference: still standing.
+  EXPECT_EQ(
+      protocol.update(MakeArray(0.04), quiet, true, true,
+                      stood + std::chrono::seconds(1)).phase,
+      PlaybackPhase::STABLE_STANDING);
+  // 0.06 rad for longer than the violation hold: back to RETURN_TO_STAND.
+  protocol.update(MakeArray(0.06), quiet, true, true, stood + std::chrono::seconds(2));
+  EXPECT_EQ(
+      protocol.update(MakeArray(0.06), quiet, true, true,
+                      stood + std::chrono::milliseconds(2200)).phase,
+      PlaybackPhase::RETURN_TO_STAND);
+}
+
+TEST(PlaybackProtocolTest, DriftReferenceIsNotRecapturedWhileStanding) {
+  PlaybackProtocol protocol(3.0, 0.05, 0.1, 0.25, 1.0, 10.0, 0.1, kSettleS);
+  const auto t0 = PlaybackProtocol::Clock::time_point{};
+  const auto quiet = MakeArray(0.0);
+  const auto stood = Qualify(protocol, MakeArray(0.0), t0);
+  ASSERT_EQ(protocol.phase(), PlaybackPhase::STABLE_STANDING);
+
+  // Creep 0.002 rad/s for 30 s while quiet: the reference stays at 0, so the drift
+  // reported keeps growing and passes 0.05 near 25 s.
+  double last_drift = 0.0;
+  bool dropped = false;
+  for (int ms = 20; ms <= 30000 && !dropped; ms += 20) {
+    const double pose = 0.002 * ms / 1000.0;
+    const auto step = protocol.update(
+        MakeArray(pose), quiet, true, true, stood + std::chrono::milliseconds(ms));
+    if (step.phase == PlaybackPhase::STABLE_STANDING) {
+      EXPECT_GE(step.standing.max_position_drift + 1e-9, last_drift);
+      last_drift = step.standing.max_position_drift;
+    } else {
+      dropped = true;
+      EXPECT_GT(ms, 25000);
+    }
+  }
+  EXPECT_TRUE(dropped);
+  EXPECT_GT(last_drift, 0.049);
+}
+
+TEST(PlaybackProtocolTest, SettleWindowAppliesAgainOnRequalification) {
+  PlaybackProtocol protocol(3.0, 0.05, 0.1, 0.25, 1.0, 10.0, 0.1, kSettleS);
+  const auto t0 = PlaybackProtocol::Clock::time_point{};
+  const auto quiet = MakeArray(0.0);
+  const auto moving = MakeArray(0.5);
+  const auto stood = Qualify(protocol, MakeArray(0.0), t0);
+  ASSERT_EQ(protocol.phase(), PlaybackPhase::STABLE_STANDING);
+
+  // Drift past the gate: back to RETURN_TO_STAND.
+  auto now = stood;
+  while (protocol.phase() == PlaybackPhase::STABLE_STANDING) {
+    now += std::chrono::milliseconds(20);
+    protocol.update(MakeArray(0.06), quiet, true, true, now);
+  }
+  const auto restarted = now;
+
+  // Moving for 4 s, then quiet: still no reference 1.4 s into the quiet time ...
+  for (int ms = 20; ms < 4000; ms += 20) {
+    protocol.update(MakeArray(0.06), moving, true, true,
+                    restarted + std::chrono::milliseconds(ms));
+  }
+  PlaybackProtocol::StepResult step;
+  for (int ms = 4000; ms < 5400; ms += 20) {
+    step = protocol.update(MakeArray(0.06), quiet, true, true,
+                           restarted + std::chrono::milliseconds(ms));
+    EXPECT_FALSE(step.standing.position_reference_available);
+  }
+  // ... and standing again once it has been quiet for 1.5 s plus the hold.
+  for (int ms = 5400; ms < 6000; ms += 20) {
+    step = protocol.update(MakeArray(0.06), quiet, true, true,
+                           restarted + std::chrono::milliseconds(ms));
+  }
+  EXPECT_EQ(step.phase, PlaybackPhase::STABLE_STANDING);
+}

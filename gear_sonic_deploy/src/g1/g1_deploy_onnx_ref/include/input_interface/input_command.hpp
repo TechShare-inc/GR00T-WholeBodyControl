@@ -188,13 +188,15 @@ class PlaybackProtocol {
       double stable_hold_s = 0.25,
       double max_recovery_displacement = 1.0,
       double return_timeout_s = 10.0,
-      double violation_hold_s = 0.1)
+      double violation_hold_s = 0.1,
+      double settle_window_s = 0.0)
       : return_duration_s_(std::max(0.001, return_duration_s)),
         position_tolerance_(std::max(0.0, position_tolerance)),
         velocity_tolerance_(std::max(0.0, velocity_tolerance)),
         stable_hold_s_(std::max(0.0, stable_hold_s)),
         max_recovery_displacement_(std::max(0.0, max_recovery_displacement)),
         violation_hold_s_(std::max(0.0, violation_hold_s)),
+        settle_window_s_(std::max(0.0, settle_window_s)),
         return_timeout_s_(std::max(
             return_duration_s_ + stable_hold_s_, return_timeout_s)) {}
 
@@ -222,6 +224,7 @@ class PlaybackProtocol {
     standing_reference_position_ = standing_position;
     phase_ = PlaybackPhase::ACTION;
     stable_since_.reset();
+    quiet_since_.reset();
     settled_reference_position_.reset();
     violation_since_.reset();
     qualification_reference_pending_ = false;
@@ -234,6 +237,7 @@ class PlaybackProtocol {
     active_playback_id_ = 0;
     return_started_at_ = now;
     stable_since_.reset();
+    quiet_since_.reset();
     settled_reference_position_.reset();
     violation_since_.reset();
     qualification_reference_pending_ = true;
@@ -265,6 +269,7 @@ class PlaybackProtocol {
     }
     return_started_at_ = now;
     stable_since_.reset();
+    quiet_since_.reset();
     settled_reference_position_.reset();
     violation_since_.reset();
     qualification_reference_pending_ = false;
@@ -402,6 +407,7 @@ class PlaybackProtocol {
 
       if (!low_state_fresh || !imu_fresh) {
         stable_since_.reset();
+        quiet_since_.reset();
         settled_reference_position_.reset();
         violation_since_.reset();
         qualification_reference_pending_ = true;
@@ -440,6 +446,15 @@ class PlaybackProtocol {
             std::chrono::duration<double>(now - *stable_since_).count();
       }
 
+      // Time the robot has been quiet; the drift reference waits for settle_window_s_.
+      if (result.standing.velocity_ok && result.standing.recovery_ok && body_stable) {
+        if (!quiet_since_.has_value()) {
+          quiet_since_ = now;
+        }
+      } else {
+        quiet_since_.reset();
+      }
+
       const double elapsed = result.standing.elapsed_s;
       if (!initial_qualification_active_ && elapsed >= return_timeout_s_) {
         active_playback_id_ = 0;
@@ -454,6 +469,11 @@ class PlaybackProtocol {
         if (!velocity_settled_and_recoverable || !body_stable) {
           stable_since_.reset();
           settled_reference_position_.reset();
+        } else if (!quiet_since_.has_value() ||
+                   std::chrono::duration<double>(now - *quiet_since_).count() <
+                       settle_window_s_) {
+          // Still settling: capture no reference yet, so slow settling motion
+          // cannot be mistaken for drift once we report standing.
         } else if (!stable_since_.has_value()) {
           stable_since_ = now;
           settled_reference_position_ = measured_position;
@@ -551,6 +571,7 @@ class PlaybackProtocol {
   double stable_hold_s_;
   double max_recovery_displacement_;
   double violation_hold_s_;
+  double settle_window_s_;  // quiet time before the drift reference is captured
   double return_timeout_s_;
   int64_t active_playback_id_ = 0;
   int64_t controller_epoch_ = 1;
@@ -558,6 +579,7 @@ class PlaybackProtocol {
   PlaybackPhase phase_ = PlaybackPhase::STABLE_STANDING;
   Clock::time_point return_started_at_{};
   std::optional<Clock::time_point> stable_since_;
+  std::optional<Clock::time_point> quiet_since_;  // speed, recovery and body ok since
   std::optional<JointArray> settled_reference_position_;
   std::optional<Clock::time_point> violation_since_;
   bool qualification_reference_pending_ = false;

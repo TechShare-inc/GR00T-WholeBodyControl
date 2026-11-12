@@ -131,6 +131,7 @@ struct StandingProfile {
   double post_action_recovery_timeout_s = 10.0;
   double low_state_freshness_limit_s = 0.5;
   double imu_freshness_limit_s = 0.5;
+  double drift_reference_settle_s = 1.5;  // quiet time before the drift reference is taken
   std::string digest = "f3e24e130eb8a9ade8f028b32034a24995dfe2c9b261d3ff6241464ba2668031";
 
   static StandingProfile Load(const std::string& path) {
@@ -167,6 +168,10 @@ struct StandingProfile {
     profile.post_action_recovery_timeout_s = number("post_action_recovery_timeout_s");
     profile.low_state_freshness_limit_s = number("low_state_freshness_limit_s");
     profile.imu_freshness_limit_s = number("imu_freshness_limit_s");
+    // Optional so profiles written before the settle window still load (issue #32).
+    if (json.contains("drift_reference_settle_s")) {
+      profile.drift_reference_settle_s = number("drift_reference_settle_s");
+    }
     profile.digest = standing_profile_detail::sha256_hex(raw);
     return profile;
   }
