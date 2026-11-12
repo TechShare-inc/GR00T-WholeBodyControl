@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <array>
 #include <thread>
 #include <vector>
@@ -94,23 +95,25 @@ std::vector<uint8_t> BuildPose(int64_t frame_index) {
   return message;
 }
 
+// A v4 frame with G1 joint data. `with_smpl` adds the SMPL fields: a frame that carries
+// SMPL is played by the SMPL encoder, one that carries only joints by the joint encoder.
 std::vector<uint8_t> BuildCorrelatedV4Pose(
-    int64_t frame_index, int64_t controller_epoch = 1, int64_t playback_id = 17) {
+    int64_t frame_index, int64_t controller_epoch = 1, int64_t playback_id = 17,
+    bool with_smpl = true) {
+  nlohmann::json fields = nlohmann::json::array({
+      {{"name", "frame_index"}, {"dtype", "i64"}, {"shape", {1}}},
+      {{"name", "controller_epoch"}, {"dtype", "i64"}, {"shape", {1}}},
+      {{"name", "playback_id"}, {"dtype", "i64"}, {"shape", {1}}},
+      {{"name", "body_quat"}, {"dtype", "f64"}, {"shape", {1, 4}}},
+      {{"name", "joint_pos"}, {"dtype", "f64"}, {"shape", {1, 29}}},
+      {{"name", "joint_vel"}, {"dtype", "f64"}, {"shape", {1, 29}}},
+  });
+  if (with_smpl) {
+    fields.push_back({{"name", "smpl_joints"}, {"dtype", "f64"}, {"shape", {1, 24, 3}}});
+    fields.push_back({{"name", "smpl_pose"}, {"dtype", "f64"}, {"shape", {1, 21, 3}}});
+  }
   nlohmann::json header = {
-      {"v", 4},
-      {"endian", "le"},
-      {"count", 1},
-      {"fields", nlohmann::json::array({
-          {{"name", "frame_index"}, {"dtype", "i64"}, {"shape", {1}}},
-          {{"name", "controller_epoch"}, {"dtype", "i64"}, {"shape", {1}}},
-          {{"name", "playback_id"}, {"dtype", "i64"}, {"shape", {1}}},
-          {{"name", "body_quat"}, {"dtype", "f64"}, {"shape", {1, 4}}},
-          {{"name", "joint_pos"}, {"dtype", "f64"}, {"shape", {1, 29}}},
-          {{"name", "joint_vel"}, {"dtype", "f64"}, {"shape", {1, 29}}},
-          {{"name", "smpl_joints"}, {"dtype", "f64"}, {"shape", {1, 24, 3}}},
-          {{"name", "smpl_pose"}, {"dtype", "f64"}, {"shape", {1, 21, 3}}},
-      })},
-  };
+      {"v", 4}, {"endian", "le"}, {"count", 1}, {"fields", fields}};
   const auto header_text = header.dump();
   std::vector<uint8_t> message;
   message.insert(message.end(), {'p', 'o', 's', 'e'});
@@ -136,9 +139,64 @@ std::vector<uint8_t> BuildCorrelatedV4Pose(
   append_bytes(body_quaternion.data(), sizeof(body_quaternion));
   append_bytes(joint_position.data(), sizeof(joint_position));
   append_bytes(joint_velocity.data(), sizeof(joint_velocity));
-  append_bytes(smpl_joints.data(), sizeof(smpl_joints));
-  append_bytes(smpl_pose.data(), sizeof(smpl_pose));
+  if (with_smpl) {
+    append_bytes(smpl_joints.data(), sizeof(smpl_joints));
+    append_bytes(smpl_pose.data(), sizeof(smpl_pose));
+  }
   return message;
+}
+
+// Start playback 17, stream one v4 frame tagged `frame_playback_id`, and report what the
+// deploy did with it: the accepted frame index, and the encoder mode of the motion.
+struct V4Result {
+  std::optional<int64_t> accepted;
+  int encode_mode;
+};
+
+V4Result StreamOneV4Frame(bool with_smpl, int64_t frame_playback_id) {
+  zmq::context_t context(1);
+  zmq::socket_t publisher(context, zmq::socket_type::pub);
+  publisher.bind("tcp://127.0.0.1:*");
+  const auto endpoint = publisher.get(zmq::sockopt::last_endpoint);
+  const auto port = std::stoi(endpoint.substr(endpoint.rfind(':') + 1));
+
+  ZMQManager manager("127.0.0.1", port);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  const auto send = [&publisher](const std::vector<uint8_t>& message) {
+    for (int i = 0; i < 3; ++i) {
+      publisher.send(zmq::buffer(message), zmq::send_flags::none);
+      std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    }
+  };
+
+  MotionDataReader motion_reader;
+  std::shared_ptr<const MotionSequence> current_motion =
+      std::make_shared<MotionSequence>();
+  int current_frame = 0;
+  OperatorState operator_state;
+  bool reinitialize_heading = false;
+  DataBuffer<HeadingState> heading_state_buffer;
+  PlannerState planner_state;
+  DataBuffer<MovementState> movement_state_buffer;
+  std::mutex current_motion_mutex;
+  bool report_temperature = false;
+  const auto step = [&]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    manager.update();
+    manager.handle_input(
+        motion_reader, current_motion, current_frame, operator_state,
+        reinitialize_heading, heading_state_buffer, true, planner_state,
+        movement_state_buffer, current_motion_mutex, report_temperature);
+  };
+
+  send(BuildCommand(true, false));
+  step();
+  const auto start = manager.ConsumePlaybackStart();
+  manager.SetPlaybackFrameAdmission(start->controller_epoch, start->playback_id, true);
+  step();
+  send(BuildCorrelatedV4Pose(42, start->controller_epoch, frame_playback_id, with_smpl));
+  step();
+  return {manager.GetLastAcceptedFrameIndex(), current_motion->GetEncodeMode()};
 }
 
 }  // namespace
@@ -340,6 +398,25 @@ TEST(ZMQPlaybackProtocolTest, AcceptsCorrelatedProtocolV4Motion) {
   ASSERT_TRUE(accepted.has_value());
   EXPECT_EQ(*accepted, 42);
   EXPECT_TRUE(manager.GetLastUpdateTime().has_value());
+}
+
+// The SMPL encoder reads SMPL fields. A G1 clip has none, so its v4 frames carry joints
+// only and must be played by the joint encoder (mode 0); zero SMPL would crouch the robot.
+TEST(ZMQPlaybackProtocolTest, V4FramesWithJointsOnlyUseTheJointEncoder) {
+  const auto result = StreamOneV4Frame(/*with_smpl=*/false, 17);
+  EXPECT_EQ(result.accepted, 42);
+  EXPECT_EQ(result.encode_mode, 0);
+}
+
+TEST(ZMQPlaybackProtocolTest, V4FramesWithSmplUseTheSmplEncoder) {
+  const auto result = StreamOneV4Frame(/*with_smpl=*/true, 17);
+  EXPECT_EQ(result.accepted, 42);
+  EXPECT_EQ(result.encode_mode, 2);
+}
+
+TEST(ZMQPlaybackProtocolTest, V4JointFramesOfAnEarlierPlaybackAreRejected) {
+  const auto result = StreamOneV4Frame(/*with_smpl=*/false, /*frame_playback_id=*/16);
+  EXPECT_FALSE(result.accepted.has_value());
 }
 
 TEST(ZMQPlaybackProtocolTest, StreamModeResetPreservesSettledIdleFrame) {

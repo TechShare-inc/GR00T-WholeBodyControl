@@ -992,7 +992,16 @@ private:
             return result;
         }
         
-        if (protocol_version == 2 || protocol_version == 3 || protocol_version == 4) {
+        // A v4 frame without SMPL fields carries G1 joint data only: it is validated and
+        // played like a v1 frame (joint encoder), keeping v4's playback correlation.
+        const bool v4_joints_only =
+            protocol_version == 4 && smpl_joints_idx < 0 && smpl_pose_idx < 0 && joint_pos_idx >= 0;
+        if (v4_joints_only) {
+            if (joint_vel_idx < 0) {
+                std::cerr << "[ZMQEndpointInterface] Version 4 missing required field 'joint_vel'" << std::endl;
+                return result;
+            }
+        } else if (protocol_version == 2 || protocol_version == 3 || protocol_version == 4) {
             // Version 2/3: require smpl_joints, smpl_pose (joint_pos/joint_vel optional for v2, required for v3)
             if (smpl_joints_idx < 0) {
                 std::cerr << "[ZMQEndpointInterface] Version " << protocol_version
@@ -1032,7 +1041,7 @@ private:
         int num_joints = 0;
         
         // Get num_frames from the primary required field for each version
-        if (protocol_version == 2 || protocol_version == 3 || protocol_version == 4) {
+        if (!v4_joints_only && (protocol_version == 2 || protocol_version == 3 || protocol_version == 4)) {
             // Version 2/3: Get num_frames from smpl_joints (required)
             const auto& smpl_field = buffered_header_.fields[smpl_joints_idx];
             if (smpl_field.shape.size() < 2) {
@@ -1071,8 +1080,8 @@ private:
                 }
             }
             num_frames = num_frames_smpl;
-        } else if (protocol_version == 1) {
-            // Version 1: Get num_frames from joint_pos (required)
+        } else if (protocol_version == 1 || v4_joints_only) {
+            // Version 1 (and joints-only v4): Get num_frames from joint_pos (required)
             const auto& joint_pos_field = buffered_header_.fields[joint_pos_idx];
             if (joint_pos_field.shape.size() != 2) {
                 std::cerr << "[ZMQEndpointInterface] Invalid joint_pos shape" << std::endl;
@@ -1816,11 +1825,11 @@ private:
         }
         
         // Convert MergeResult to DecodeResult
-        if (active_protocol_version_ == 1) {
-            merge_result.motion->SetEncodeMode(0);  // Protocol 1: joint-based
+        if (active_protocol_version_ == 1 || v4_joints_only) {
+            merge_result.motion->SetEncodeMode(0);  // joint-based: v1, or v4 with joints only
         } else if (active_protocol_version_ == 2 || active_protocol_version_ == 3 ||
                    active_protocol_version_ == 4) {
-            // Protocol versions 2, 3, and 4 motion frames use encoder mode 2.
+            // v2, v3 and v4-with-SMPL motion frames use encoder mode 2.
             merge_result.motion->SetEncodeMode(2);
         }
         result.motion = merge_result.motion;

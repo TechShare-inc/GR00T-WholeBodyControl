@@ -222,7 +222,15 @@ private:
         }
         
         // Validate protocol-specific requirements
-        if (data.protocol_version == 3 || data.protocol_version == 4) {
+        // v4 without SMPL data is a joints-only frame (joint encoder), checked like v1 below.
+        const bool v4_joints_only = data.protocol_version == 4 && data.smpl_joints.empty() &&
+                                    data.smpl_pose.empty();
+        if (v4_joints_only) {
+            if (data.joint_pos.empty() || data.joint_vel.empty()) {
+                std::cerr << "[StreamedMotionMerger] Protocol v4 missing joint_pos or joint_vel" << std::endl;
+                return false;
+            }
+        } else if (data.protocol_version == 3 || data.protocol_version == 4) {
             // Versions 3 and 4: require both SMPL data AND joint data.
             // v4 adds playback correlation to the wire format but retains
             // the same motion payload contract as v3.
