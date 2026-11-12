@@ -15,6 +15,22 @@
 # All options after <interface> are forwarded directly to g1_deploy_onnx_ref.
 set -euo pipefail
 
+# ---------------------------------------------------------------------------
+# Refuse to run unless `sonic up` (ts-agentic-sonic) started us: it passes the
+# open GPU lock file as an inherited fd, numbered in SONIC_LOCK_FD. That fd must
+# be the lock file and must itself hold the exclusive flock. No flag or
+# environment variable turns this off.
+# ---------------------------------------------------------------------------
+GPU_LOCK=/tmp/ts-agentic-sonic-gpu.lock  # keep equal to GPU_LOCK in ts-agentic-sonic
+LOCK_FD="${SONIC_LOCK_FD:-}"
+if [[ ! "$LOCK_FD" =~ ^[0-9]+$ ]] \
+    || [[ ! /proc/self/fd/$LOCK_FD -ef $GPU_LOCK ]] \
+    || flock -n "$GPU_LOCK" true \
+    || ! flock -n "$LOCK_FD"; then  # a fresh open must find it locked, by our fd
+  echo "start me through sonic up" >&2
+  exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$(dirname "$SCRIPT_DIR")"
 
