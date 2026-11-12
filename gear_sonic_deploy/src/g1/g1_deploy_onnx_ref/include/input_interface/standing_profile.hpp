@@ -171,6 +171,11 @@ struct StandingProfile {
     // Optional so profiles written before the settle window still load (issue #32).
     if (json.contains("drift_reference_settle_s")) {
       profile.drift_reference_settle_s = number("drift_reference_settle_s");
+      // 1-2 s is the window the drift fix was designed for; 0 would bring back the old
+      // behaviour (reference taken while still settling), so it is refused.
+      if (profile.drift_reference_settle_s < 1.0 || profile.drift_reference_settle_s > 2.0) {
+        throw std::runtime_error("Standing profile drift_reference_settle_s must be 1.0-2.0 s");
+      }
     }
     profile.digest = standing_profile_detail::sha256_hex(raw);
     return profile;
