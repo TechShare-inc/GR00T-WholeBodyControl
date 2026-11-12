@@ -110,6 +110,7 @@
 #include "../include/robot_parameters.hpp"
 #include "../include/policy_parameters.hpp"
 #include "../include/motor_gain_scaling.hpp"
+#include "../include/dds_domain.hpp"
 
 // Input interface and input handlers
 #include "../include/input_interface/keyboard_handler.hpp"
@@ -5060,13 +5061,8 @@ int main(int argc, char const* argv[]) {
         std::cerr << "Error: --dds-domain requires a value argument" << std::endl;
         return 1;
       }
-      try {
-        ddsDomain = std::stoi(argv[++i]);
-      } catch (...) {
-        ddsDomain = -1;
-      }
-      if (ddsDomain < 0 || ddsDomain > 232) {
-        std::cerr << "Error: --dds-domain must be an integer in [0, 232]" << std::endl;
+      if (!parse_dds_domain(argv[++i], ddsDomain)) {
+        std::cerr << "Error: --dds-domain must be an integer in [0, 232], got: " << argv[i] << std::endl;
         return 1;
       }
       std::cout << "[INFO] DDS domain: " << ddsDomain << std::endl;
